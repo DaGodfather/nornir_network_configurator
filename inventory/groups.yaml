@@ -1,0 +1,22 @@
+---
+  cisco:
+    platform: cisco_ios
+
+  juniper: 
+    platform: juniper_junos
+---
+cisco:
+  connection_options:
+    netmiko:
+      extras:
+        fast_cli: true
+        # If you need enable (privileged) mode on IOS/IOS-XE/IOS-XR:
+        # secret: "YOUR_ENABLE_PASSWORD"
+        # Optional session logs (ensure the directory exists or remove this):
+        session_log: "logs/{host}-netmiko.log"
+
+juniper:
+  connection_options:
+    netmiko:
+      extras:
+        fast_cli: true

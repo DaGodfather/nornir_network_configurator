@@ -1,0 +1,17 @@
+edge1:
+  hostname: 192.0.2.11
+  platform: cisco_ios        # Netmiko device_type
+  groups: [cisco]
+  data:
+    site: ICENET 
+    role: edge
+    address: Unkown
+# Example Juniper
+jnp-qfx1:
+  hostname: 192.0.2.21
+  platform: juniper_junos    # Netmiko device_type
+  groups: [juniper]
+  data:
+    site: NNET
+    role: access
+    address: Unkown

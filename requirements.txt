@@ -1,0 +1,25 @@
+netmiko>=3.4,<4.0
+paramiko<3.0
+scp<0.15
+pyserial<3.6
+textfsm<1.2
+ntc-templates>=3,<4
+tenacity<9.0
+
+rich==12.6.0
+
+# Pin ruamel.yaml to a pure-Python version (no clib build)
+ruamel.yaml==0.16.13
+tabulate<0.9
+colorama<0.5
+Jinja2<3.1
+
+importlib-resources<5
+typing-extensions<4.2
+dataclasses<0.9
+
+# Crypto pins with Windows wheels for Py3.6 (already installed earlier, but safe to keep)
+PyNaCl==1.4.0
+cryptography==3.3.2
+bcrypt==3.2.0
+cffi==1.15.1
