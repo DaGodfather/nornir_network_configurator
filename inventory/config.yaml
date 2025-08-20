@@ -1,16 +1,17 @@
 ---
 inventory:
-  plugin: SimpleInventory
+  plugin: nornir.plugins.inventory.simple.SimpleInventory
   options:
     host_file: 'inventory/hosts.yaml'
     group_file: 'inventory/groups.yaml'
     defaults_file: 'inventory/defaults.yaml'
 
-runner:
-  plugin: threaded
-  options:
-    num_workers: 50
+core:
+  num_workers: 50
 
 logging:
+  enabled: true
   level: DEBUG
-  log_file: "logs/nornir.log"
+  file: "logs/nornir.log"
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  loggers: ['nornir']
