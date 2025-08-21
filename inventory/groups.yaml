@@ -1,10 +1,4 @@
 ---
-  cisco:
-    platform: cisco_ios
-
-  juniper: 
-    platform: juniper_junos
----
 cisco:
   connection_options:
     netmiko:

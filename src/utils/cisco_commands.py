@@ -1,8 +1,8 @@
 from nornir.core.task import Result, Task
-from nornir_netmiko.tasks import (
-    netmiko_save_config,
+from nornir.plugins.tasks.networking import (
     netmiko_send_command,
-    netmiko_send_config
+    netmiko_send_config,
+    netmiko_save_config
 )
 
 def get_show_run(task: Task) -> str:
@@ -12,8 +12,7 @@ def get_show_run(task: Task) -> str:
 
     result = task.run(
         task=netmiko_send_command,
-        command_string="show run"
-        read_timeout = 500
+        command_string="show run",
         )
     
     return result.result
@@ -32,8 +31,7 @@ def get_access_list_standard_names(task: Task) -> str:
 
     result = task.run(
         task=netmiko_send_command,
-        command_string="show run | i access-list standard"
-        read_timeout = 500
+        command_string="show run | i access-list standard",
         )
     
     return result.result
@@ -51,8 +49,7 @@ def get_show_run_ntp_info(task: Task) -> str:
 
     result = task.run(
         task=netmiko_send_command,
-        command_string="show run | i ntp server"
-        read_timeout = 500
+        command_string="show run | i ntp server",
         )
     
     return result.result
@@ -69,8 +66,7 @@ def get_show_run_domain_name(task: Task) -> str:
 
     result = task.run(
         task=netmiko_send_command,
-        command_string="show run | i domain name"
-        read_timeout = 500
+        command_string="show run | i domain name",
         )
     
     return result.result
@@ -87,8 +83,7 @@ def get_show_run_snmp_host(task: Task) -> str:
 
     result = task.run(
         task=netmiko_send_command,
-        command_string="show run | i snmp-server host"
-        read_timeout = 500
+        command_string="show run | i snmp-server host",
         )
     
     return result.result
@@ -105,8 +100,7 @@ def get_show_run_snmp_community(task: Task) -> str:
 
     result = task.run(
         task=netmiko_send_command,
-        command_string="show run | i snmp-server community"
-        read_timeout = 500
+        command_string="show run | i snmp-server community",
         )
     
     return result.result
@@ -121,8 +115,7 @@ def get_show_run_snmp(task: Task) -> str:
 
     result = task.run(
         task=netmiko_send_command,
-        command_string="show run | i snmp-server"
-        read_timeout = 500
+        command_string="show run | i snmp-server",
         )
     
     return result.result
@@ -139,8 +132,7 @@ def get_show_run_logging_host(task: Task) -> str:
 
     result = task.run(
         task=netmiko_send_command,
-        command_string="show run | i logging host"
-        read_timeout = 500
+        command_string="show run | i logging host",
         )
     
     return result.result
@@ -153,8 +145,7 @@ def get_show_run_aaa(task: Task) -> str:
 
     result = task.run(
         task=netmiko_send_command,
-        command_string="show run aaa"
-        read_timeout = 500
+        command_string="show run aaa",
         )
     
     return result.result
@@ -169,8 +160,7 @@ def get_show_run_username(task: Task) -> str:
 
     result = task.run(
         task=netmiko_send_command,
-        command_string="show run | i username"
-        read_timeout = 500
+        command_string="show run | i username",
         )
     
     return result.result
@@ -185,8 +175,7 @@ def get_show_run_enable(task: Task) -> str:
 
     result = task.run(
         task=netmiko_send_command,
-        command_string="show run | i enable"
-        read_timeout = 500
+        command_string="show run | i enable",
         )
     
     return result.result
@@ -201,8 +190,7 @@ def get_show_banner_exec(task: Task) -> str:
 
     result = task.run(
         task=netmiko_send_command,
-        command_string="show banner exec"
-        read_timeout = 500
+        command_string="show banner exec",
         )
     
     return result.result
@@ -221,8 +209,7 @@ def configure_ntp_cisco(task: Task, ip: str) -> None:
 
     result = task.run(
         task=netmiko_send_command,
-        command_string=f"ntp server {ip}"
-        read_timeout = 500
+        command_string=f"ntp server {ip}",
         )
     
     return None
@@ -235,8 +222,7 @@ def configure_logging_cisco(task: Task, ip: str) -> None:
 
     result = task.run(
         task=netmiko_send_command,
-        command_string=f"logging host {ip}"
-        read_timeout = 500
+        command_string=f"logging host {ip}",
         )
     
     return None
@@ -249,8 +235,7 @@ def send_command_cisco(task: Task, command: str) -> None:
 
     result = task.run(
         task=netmiko_send_command,
-        command_string=f"{command}"
-        read_timeout = 500
+        command_string=f"{command}",
         )
     
     return None

@@ -1,6 +1,7 @@
 # src/app_main.py
 # Python 3.6+ / Nornir 2.5
 import importlib
+import os
 from pathlib import Path
 from typing import Callable, Tuple
 from getpass import getpass, getuser
@@ -9,6 +10,7 @@ from nornir import InitNornir
 from nornir.core.task import Task, Result
 from nornir.plugins.functions.text import print_result
 
+from src.utils.table_printer import print_device_table
 from .utils.arg_parser import CliArgs
 from .utils.rich_progress import get_progress_manager
 
@@ -89,6 +91,10 @@ def main() -> None:
 
     pm = get_progress_manager()
 
+    os.system("clear")
+    if action_name == "test":
+        print("\n\nThis is only a TEST!!\n\n")
+
     # One row per host (total=1 => per-host unit of work)
     with pm:
         for host in nr.inventory.hosts.values():
@@ -109,7 +115,36 @@ def main() -> None:
         for host in nr.inventory.hosts:
             pm.complete(host=host)
 
-    print_result(result)
+    #print_result(result)
+    def last_dict(mr):
+        """Return the last .result that is a dict from a MultiResult (or {})."""
+        for r in reversed(mr):            # walk from most recent
+            v = getattr(r, "result", None)
+            if isinstance(v, dict):
+                return v
+        return {}
+
+    rows = []
+
+    for host, mr in result.items():        # mr is a MultiResult for this host
+        payload = last_dict(mr)            # this is your {'device':..., 'ip':...} dict
+        if not payload:                    # fallback if action didn't return a dict
+            payload = {
+                "device": host,
+                "ip": nr.inventory.hosts[host].hostname or "",
+                "platform": nr.inventory.hosts[host].platform or "",
+                "model": (nr.inventory.hosts[host].data or {}).get("model", "N/A"),
+                "status": "FAIL" if mr.failed else "OK",
+                "info": "",
+            }
+        else:
+            # ensure status reflects execution outcome, if you want:
+            payload.setdefault("status", "FAIL" if mr.failed else "OK")
+        rows.append(payload)
+
+    # Pretty print with Rich (uses the helper we wrote earlier)
+    print("\n\n")
+    print_device_table(rows)
 
 
 if __name__ == "__main__":

@@ -1,8 +1,8 @@
 from nornir.core.task import Result, Task
-from nornir_netmiko.tasks import (
-    netmiko_save_config,
+from nornir.plugins.tasks.networking import (
     netmiko_send_command,
-    netmiko_send_config
+    netmiko_send_config,
+    netmiko_save_config
 )
 
 def get_show_run(task: Task) -> str:
@@ -12,8 +12,7 @@ def get_show_run(task: Task) -> str:
 
     result = task.run(
         task=netmiko_send_command,
-        command_string="show config | display set"
-        read_timeout = 500
+        command_string="show config | display set",
         )
     
     return result.result
@@ -31,8 +30,7 @@ def get_show_run_ntp_info(task: Task) -> str:
 
     result = task.run(
         task=netmiko_send_command,
-        command_string="show run | display set | match 'ntp server'"
-        read_timeout = 500
+        command_string="show run | display set | match 'ntp server'",
         )
     
     return result.result
@@ -49,8 +47,7 @@ def get_show_run_domain_name(task: Task) -> str:
 
     result = task.run(
         task=netmiko_send_command,
-        command_string="show run | display set | match name-server"
-        read_timeout = 500
+        command_string="show run | display set | match name-server",
         )
     
     return result.result
@@ -67,8 +64,7 @@ def get_show_run_snmp_host(task: Task) -> str:
 
     result = task.run(
         task=netmiko_send_command,
-        command_string="show run | display set | match snmp"
-        read_timeout = 500
+        command_string="show run | display set | match snmp",
         )
     
     return result.result
@@ -85,8 +81,7 @@ def get_show_run_snmp_community(task: Task) -> str:
 
     result = task.run(
         task=netmiko_send_command,
-        command_string="show run | i snmp-server community"
-        read_timeout = 500
+        command_string="show run | i snmp-server community",
         )
     
     return result.result
@@ -103,8 +98,7 @@ def get_show_run_syslog_host(task: Task) -> str:
 
     result = task.run(
         task=netmiko_send_command,
-        command_string="show run | display set | match 'syslog host'"
-        read_timeout = 500
+        command_string="show run | display set | match 'syslog host'",
         )
     
     return result.result
@@ -117,8 +111,7 @@ def get_show_run_aaa(task: Task) -> str:
 
     result = task.run(
         task=netmiko_send_command,
-        command_string="show run aaa"
-        read_timeout = 500
+        command_string="show run aaa",
         )
     
     return result.result
@@ -127,15 +120,14 @@ def get_show_run_aaa(task: Task) -> str:
 This section below are all the commands to configure the device.
 """
 
-def configure_ntp(task: Task, ip:) -> None:
+def configure_ntp(task: Task, ip: str) -> None:
     """
     Task
     """
 
     result = task.run(
         task=netmiko_send_command,
-        command_string="show run aaa"
-        read_timeout = 500
+        command_string="show run aaa",
         )
     
     return none
