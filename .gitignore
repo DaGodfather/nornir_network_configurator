@@ -1,4 +1,3 @@
 .venv/
 logs/nornir.log*
-src/actions/
 __pycache__
