@@ -13,6 +13,7 @@ from nornir.plugins.functions.text import print_result
 from src.utils.table_printer import print_device_table
 from .utils.arg_parser import CliArgs
 from .utils.rich_progress import get_progress_manager
+from .utils.transport_discovery import bootstrap_transport
 
 
 # Map CLI flags -> module name inside src/actions/
@@ -88,10 +89,19 @@ def main() -> None:
     except ValueError as e:
         print("Error: {}".format(e))
         raise SystemExit(2)
+    
+    # Clear the screen.
+    os.system("clear")
+
+    # if not test, create cache for transport type
+    # Pre-stage: apply cached decisions and discover for unknown hosts
+    if action_name != 'test':
+        print("Creating/Updating transport_cache.json for logging into device.....")
+        disc = bootstrap_transport(nr, cache_path="transport_cache.json")
 
     pm = get_progress_manager()
 
-    os.system("clear")
+    # Print test banner/message if this is a test run.
     if action_name == "test":
         print("\n\nThis is only a TEST!!\n\n")
 
@@ -104,7 +114,7 @@ def main() -> None:
                 description="Queued ({})".format(action_name),
                 platform=str(host.platform or ""),
             )
-
+        # (connection options already set)
         result = nr.run(
             name="Action: {}".format(action_name),
             task=main_task,

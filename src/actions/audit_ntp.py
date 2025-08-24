@@ -1,60 +1,135 @@
 # src/actions/audit_ntp.py
 # Python 3.6+ / Nornir 2.5
 
+"""
+Audit NTP configuration/status and return a per-host row for your summary table.
+
+This module conforms to app_main.py's expectations:
+- It defines `run(task, pm)` -> Result
+- It returns a Result whose `.result` is a dict with keys:
+    device, ip, platform, model, status("OK"/"FAIL"), info(<captured CLI text>)
+
+Behavior:
+1) Choose a concise, platform-aware config grep for NTP.
+2) If the grep returns nothing, fall back to an operational command
+   (e.g., 'show ntp associations' / 'show ntp peers') to provide useful context.
+3) Put the captured text into `info`. If still empty, set status=FAIL.
+"""
+
 from utils.cisco_commands import *
 from utils.juniper_commands import *
 from nornir.core.task import Task, Result
 from nornir.plugins.tasks.networking import netmiko_send_command
 
+# --------------------------- Platform helpers ---------------------------
 
-def _is_juniper(platform: str) -> bool:
-    if not platform:
-        return False
-    p = platform.lower()
-    return p in ("junos", "juniper")
-
-
-def _is_cisco(platform: str) -> bool:
-    if not platform:
-        return False
-    p = platform.lower()
-    # Treat common Cisco platforms as “Cisco” for this audit
-    return p.startswith("ios") or p in ("ios", "iosxe", "iosxr", "nxos", "cisco")
+def _is_juniper(platform):
+    p = (platform or "").lower()
+    return p in ("juniper", "junos", "juniper_junos")
 
 
-def run(task: Task, pm) -> Result:
+def _is_cisco(platform):
+    p = (platform or "").lower()
+    return p in ("cisco_ios", "ios", "ios-xe", "iosxe", "cisco_nxos", "nxos")
+
+
+def _pick_ntp_config_cmd(platform):
     """
-    Audit NTP configuration.
-      - Cisco:   'show run | i ntp server'
-      - Juniper: 'show configuration | display json'
-    Returns the device's raw CLI output as the Result.result string.
+    Return a concise config-focused command that lists NTP peers/servers.
+    """
+    if _is_juniper(platform):
+        # Only NTP stanza, easy to read/log.
+        return "show configuration system ntp | display set"
+    if _is_cisco(platform):
+        # Anchor at line start to avoid noise.
+        return "show run | i ^ntp server|^ntp peer|^ntp pool"
+    # Fallback: generic Cisco-ish grep
+    return "show run | i ntp server|ntp peer|ntp pool"
+
+
+def _pick_ntp_operational_fallback(platform):
+    """
+    If config grep turns up empty, try an operational command so we still return
+    something informative (status/associations).
+    """
+    if _is_juniper(platform):
+        # Junos operational NTP
+        return "show ntp associations"
+    if _is_cisco(platform):
+        # IOS/NX-OS—one of these usually works; Netmiko will run the string as-is.
+        # We try 'associations' first; 'peers' is common on NX-OS.
+        # Note: we execute only ONE fallback; pick the most universal for your fleet.
+        return "show ntp associations"
+    # Fallback, try the most common
+    return "show ntp associations"
+
+
+def _extract_text(nr_result):
+    """
+    Nornir may give a MultiResult; Netmiko returns a Result.
+    Return plain text either way.
+    """
+    out = getattr(nr_result, "result", None)
+    if isinstance(out, str):
+        return out
+    try:
+        return nr_result[0].result
+    except Exception:
+        return ""
+
+
+# ------------------------------- Action --------------------------------
+
+def run(task: Task, pm=None) -> Result:
+    """
+    Entry point required by app_main.py.
+    Executes an NTP audit and returns a row dict in Result.result.
     """
     host = task.host.name
-    platform = (task.host.platform or "").lower()
+    platform = task.host.platform
+    ip = task.host.hostname
 
-    # Progress: set row text, then run, then advance
-    pm.update(host=host, description="Auditing NTP")
+    # 1) Try concise config grep
+    cfg_cmd = _pick_ntp_config_cmd(platform)
+    r1 = task.run(task=netmiko_send_command, command_string=cfg_cmd, name="NTP config grep")
+    text = (_extract_text(r1) or "").strip()
 
-    if _is_juniper(platform):
-        cmd = "show configuration | display json"  # full keyword is safest
-    elif _is_cisco(platform):
-        cmd = "show run | i ntp server"
-    else:
-        # Fallback: default to Cisco syntax (common in many shops)
-        cmd = "show run | i ntp server"
+    # 2) If empty, try an operational fallback for visibility
+    if not text:
+        op_cmd = _pick_ntp_operational_fallback(platform)
+        r2 = task.run(task=netmiko_send_command, command_string=op_cmd, name="NTP operational")
+        text = (_extract_text(r2) or "").strip()
 
-    # Execute command
-    r = task.run(task=netmiko_send_command, command_string=cmd, name=f"{host}: {cmd}")
+    # 3) Decide status & build the row
+    status = "OK" if text else "FAIL"
+    info_text = text if text else "No NTP lines returned"
 
-    # Nornir returns a Result; in rare cases a MultiResult—handle both safely
-    out = getattr(r, "result", None)
-    if out is None and hasattr(r, "__getitem__"):
+    # Progress UI (if pm is a real manager in your setup)
+    if pm is not None:
         try:
-            out = r[0].result
+            pm.advance(host=host)
+            pm.update(host=host, description="Completed")
         except Exception:
-            out = ""
+            pass
+    
+    """
+    This section is for reporting and requires to send back a dictionary. The following format must be returned
 
-    pm.advance(host=host)
-    pm.update(host=host, description="Completed")
+    Example:
+    rows = [
+    {"device": "edge1", "ip": "192.0.2.11", "platform": "cisco_ios", "model": "ISR4431", "status": "OK", "info": "NTP present"},
+    {"device": "jnp-qfx1", "ip": "192.0.2.21", "platform": "juniper_junos", "model": "QFX5120", "status": "FAIL", "info": "No ntp server"},
+    ]
+    """
 
-    return Result(host=task.host, changed=False, result=out or "")
+    # Build your row
+    row = {
+        "device": host,
+        "ip": ip,
+        "platform": platform,
+        "model": task.host.get("model", "N/A"),  # keep if you populate it elsewhere
+        "status": status,
+        "info": info_text,
+    }
+
+    return Result(host=task.host, changed=False, result=row)
