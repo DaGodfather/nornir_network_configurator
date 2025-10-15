@@ -27,9 +27,10 @@ ACTION_MAP = {
     "audit_local_passowrd":  "audit_local_passowrd",
     "update_local_passowrd": "update_local_passowrd",
     "update_tacacs":         "update_tacacs",
-    "update_cisco_vty_acl"   "udpate_cisco_vty_acl"
+    "update_cisco_vty_acl":   "udpate_cisco_vty_acl",
     "from_text_file":        "from_text_file",
     "test":                  "test",
+
 }
 
 
