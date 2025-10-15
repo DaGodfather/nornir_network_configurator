@@ -1,0 +1,38 @@
+# requirements-py36.txt
+# Target: Python 3.6.8, Nornir 2.5, latest Netmiko compatible with Py3.6
+# Notes:
+# - These pins favor Py3.6 compatibility and stability.
+# - If you upgrade Python, create a separate requirements-modern.txt and unpin accordingly.
+
+# --- Core automation stack ---
+nornir==2.5.0
+
+# Netmiko + SSH stack (pins chosen to support Py3.6)
+netmiko==3.4.0
+paramiko==2.11.0
+scp==0.14.4
+
+# YAML / templating
+PyYAML==6.0
+Jinja2==3.0.3
+MarkupSafe==2.0.1
+
+# Console UX
+rich==12.6.0
+tabulate==0.8.10
+
+# Typing backports for 3.6
+typing-extensions==4.1.1
+
+# (Optional) If you parse TextFSM templates with Netmiko
+# textfsm==1.1.2
+# ntc-templates==3.4.0
+
+# (Optional) If you need Juniper PyEZ/NAPALM:
+# junos-eznc==2.6.5
+# napalm==3.4.1
+
+# ---- Known constraints for Py3.6 environments ----
+# Cryptography/bcrypt newer releases may drop 3.6 wheels; if needed, pin:
+# cryptography==38.0.4
+# bcrypt==3.2.2

@@ -7,8 +7,8 @@ class CliArgs:
 
     def __init__(self):
         self.parser = argparse.ArgumentParser(description="Brightspeed Managment Network Change script.")
-        self.parser.add_argument("-update_acl", action="store_true", help="Update ACLs on devices")
-        self.parser.add_argument("-audit_acl", action="store_true", help="Audit ACLs on devices")
+        self.parser.add_argument("-update_vty_acl", action="store_true", help="Update VTY ACLs on Cisco devices")
+        self.parser.add_argument("-audit_vty_acl", action="store_true", help="Audit VTY ACLs on Cisco devices")
         self.parser.add_argument("-audit_ntp", action="store_true", help="Audit NTP config on devices")
         self.parser.add_argument("-update_ntp", action="store_true", help="Update NTP config on devices")
         self.parser.add_argument("-audit_domain_name", action="store_true", help="Audit domain name config on devices")

@@ -18,8 +18,8 @@ from .utils.transport_discovery import bootstrap_transport
 
 # Map CLI flags -> module name inside src/actions/
 ACTION_MAP = {
-    "update_acl":            "update_acl",
-    "audit_acl":             "audit_acl",
+    "update_vty_acl":            "update_vty_acl",
+    "audit_vty_acl":             "audit_vty_acl",
     "audit_ntp":             "audit_ntp",
     "update_ntp":            "update_ntp",
     "audit_domain_name":     "audit_domain_name",
