@@ -21,7 +21,7 @@ from src.utils.cisco_commands import *
 from src.utils.juniper_commands import *
 from nornir.core.task import Task, Result
 from nornir.plugins.tasks.networking import netmiko_send_command
-from netmiko.exceptions import NetmikoAuthenticationException, NetmikoTimeoutException
+from netmiko.ssh_exception import NetmikoAuthenticationException, NetmikoTimeoutException
 
 # Initialize logger
 logger = logging.getLogger(__name__)
