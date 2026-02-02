@@ -46,10 +46,11 @@ def _pick_ntp_config_cmd(platform):
         # Only NTP stanza, easy to read/log.
         return "show configuration system ntp | display set"
     if _is_cisco(platform):
-        # Anchor at line start to avoid noise.
-        return "show run | i ntp server"
+        # Use 'include' without regex anchors for maximum compatibility
+        # This will match any line containing 'ntp server', 'ntp peer', or 'ntp pool'
+        return "show run | include ntp"
     # Fallback: generic Cisco-ish grep
-    return "show run | i ntp server|ntp peer|ntp pool"
+    return "show run | include ntp"
 
 
 def _pick_ntp_operational_fallback(platform):
