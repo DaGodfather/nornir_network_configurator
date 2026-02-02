@@ -16,8 +16,8 @@ Behavior:
 3) Put the captured text into `info`. If still empty, set status=FAIL.
 """
 
-from utils.cisco_commands import *
-from utils.juniper_commands import *
+from src.utils.cisco_commands import *
+from src.utils.juniper_commands import *
 from nornir.core.task import Task, Result
 from nornir.plugins.tasks.networking import netmiko_send_command
 
@@ -42,7 +42,7 @@ def _pick_ntp_config_cmd(platform):
         return "show configuration system ntp | display set"
     if _is_cisco(platform):
         # Anchor at line start to avoid noise.
-        return "show run | i ^ntp server|^ntp peer|^ntp pool"
+        return "show run | i ntp server"
     # Fallback: generic Cisco-ish grep
     return "show run | i ntp server|ntp peer|ntp pool"
 
