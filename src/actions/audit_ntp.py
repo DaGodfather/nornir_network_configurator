@@ -16,10 +16,15 @@ Behavior:
 3) Put the captured text into `info`. If still empty, set status=FAIL.
 """
 
+import logging
 from src.utils.cisco_commands import *
 from src.utils.juniper_commands import *
 from nornir.core.task import Task, Result
 from nornir.plugins.tasks.networking import netmiko_send_command
+from netmiko.exceptions import NetmikoAuthenticationException, NetmikoTimeoutException
+
+# Initialize logger
+logger = logging.getLogger(__name__)
 
 # --------------------------- Platform helpers ---------------------------
 
@@ -89,20 +94,48 @@ def run(task: Task, pm=None) -> Result:
     platform = task.host.platform
     ip = task.host.hostname
 
-    # 1) Try concise config grep
-    cfg_cmd = _pick_ntp_config_cmd(platform)
-    r1 = task.run(task=netmiko_send_command, command_string=cfg_cmd, name="NTP config grep")
-    text = (_extract_text(r1) or "").strip()
+    logger.info(f"[{host}] Starting NTP audit for {ip} (platform: {platform})")
 
-    # 2) If empty, try an operational fallback for visibility
-    if not text:
-        op_cmd = _pick_ntp_operational_fallback(platform)
-        r2 = task.run(task=netmiko_send_command, command_string=op_cmd, name="NTP operational")
-        text = (_extract_text(r2) or "").strip()
+    try:
+        # 1) Try concise config grep
+        cfg_cmd = _pick_ntp_config_cmd(platform)
+        logger.info(f"[{host}] Sending command: {cfg_cmd}")
 
-    # 3) Decide status & build the row
-    status = "OK" if text else "FAIL"
-    info_text = text if text else "No NTP lines returned"
+        r1 = task.run(task=netmiko_send_command, command_string=cfg_cmd, name="NTP config grep")
+        text = (_extract_text(r1) or "").strip()
+
+        logger.debug(f"[{host}] Command output ({len(text)} chars):\n{text}")
+
+        # 2) If empty, try an operational fallback for visibility
+        if not text:
+            op_cmd = _pick_ntp_operational_fallback(platform)
+            logger.info(f"[{host}] Config grep empty, trying operational command: {op_cmd}")
+
+            r2 = task.run(task=netmiko_send_command, command_string=op_cmd, name="NTP operational")
+            text = (_extract_text(r2) or "").strip()
+
+            logger.debug(f"[{host}] Operational command output ({len(text)} chars):\n{text}")
+
+        # 3) Decide status & build the row
+        status = "OK" if text else "FAIL"
+        info_text = text if text else "No NTP lines returned"
+
+        logger.info(f"[{host}] Audit complete - Status: {status}")
+
+    except NetmikoAuthenticationException as e:
+        logger.error(f"[{host}] Authentication failed: {str(e)}")
+        status = "FAIL"
+        info_text = "Authentication failed - check credentials"
+
+    except NetmikoTimeoutException as e:
+        logger.error(f"[{host}] Connection timeout: {str(e)}")
+        status = "FAIL"
+        info_text = "Connection timeout - device unreachable"
+
+    except Exception as e:
+        logger.error(f"[{host}] Unexpected error: {str(e)}", exc_info=True)
+        status = "FAIL"
+        info_text = f"Error: {str(e)}"
 
     # Progress UI (if pm is a real manager in your setup)
     if pm is not None:
@@ -111,7 +144,7 @@ def run(task: Task, pm=None) -> Result:
             pm.update(host=host, description="Completed")
         except Exception:
             pass
-    
+
     """
     This section is for reporting and requires to send back a dictionary. The following format must be returned
 
