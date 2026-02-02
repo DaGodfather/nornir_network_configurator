@@ -68,7 +68,12 @@ def main() -> None:
 
     # ---- Creds ----
     username = getuser()
-    password = getpass()
+    password = getpass(prompt="Password: ")
+    enable_secret = getpass(prompt="Enable password (press Enter if same as login password): ")
+
+    # If enable password is empty, use the same password
+    if not enable_secret:
+        enable_secret = password
 
     # ---- Resolve inventory/config.yaml from project root ----
     project_root = Path(__file__).resolve().parents[1]  # .../your_project
@@ -81,6 +86,8 @@ def main() -> None:
     for host in nr.inventory.hosts.values():
         host.username = username
         host.password = password
+        # Store enable secret in host data for use by connection options
+        host.data["enable_secret"] = enable_secret
 
     tasks = len(nr.inventory.hosts)
     print("\nRunning task on {} device(s)".format(tasks))

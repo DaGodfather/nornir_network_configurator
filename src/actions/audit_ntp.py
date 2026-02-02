@@ -94,7 +94,15 @@ def run(task: Task, pm=None) -> Result:
     platform = task.host.platform
     ip = task.host.hostname
 
-    logger.info(f"[{host}] Starting NTP audit for {ip} (platform: {platform})")
+    # Log connection details
+    conn_opts = task.host.connection_options.get("netmiko")
+    if conn_opts:
+        device_type = conn_opts.extras.get("device_type", "unknown")
+        port = conn_opts.port or "default"
+        has_secret = "secret" in conn_opts.extras
+        logger.info(f"[{host}] Starting NTP audit for {ip} (platform: {platform}, device_type: {device_type}, port: {port}, enable_secret_configured: {has_secret})")
+    else:
+        logger.info(f"[{host}] Starting NTP audit for {ip} (platform: {platform})")
 
     try:
         # 1) Try concise config grep

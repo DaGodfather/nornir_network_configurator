@@ -80,6 +80,7 @@ def apply_conn(host_or_task: Any, device_type: str, port: int) -> None:
     """
     Apply Netmiko connection options to a Host (or Task.host).
     This overrides connection settings in-memory for the current Nornir run.
+    Preserves existing extras from groups.yaml while adding transport-specific settings.
     """
     host = getattr(host_or_task, "host", host_or_task)
     # Close any open Netmiko session before changing options
@@ -88,9 +89,23 @@ def apply_conn(host_or_task: Any, device_type: str, port: int) -> None:
     except Exception:
         pass
 
+    # Start with existing extras from groups.yaml (if any)
+    existing_extras = {}
+    if "netmiko" in host.connection_options:
+        existing_extras = host.connection_options["netmiko"].extras or {}
+
+    # Build new extras dict, preserving existing settings
+    extras = dict(existing_extras)
+    extras["device_type"] = device_type
+
+    # Add enable secret if it exists in host data
+    enable_secret = host.data.get("enable_secret")
+    if enable_secret:
+        extras["secret"] = enable_secret
+
     host.connection_options["netmiko"] = ConnectionOptions(
         port=port,
-        extras={"device_type": device_type},
+        extras=extras,
     )
 
 
@@ -125,6 +140,7 @@ def apply_cache_to_inventory(nr: Any, cache_path: str = CACHE_PATH) -> None:
         rec = cache.get(host.name)
         if not rec:
             continue
+        # apply_conn will now pick up the enable_secret from host.data if it exists
         apply_conn(host, rec["device_type"], int(rec["port"]))
         host["mgmt_transport"] = rec.get("transport")
         host["device_type"] = rec.get("device_type")
