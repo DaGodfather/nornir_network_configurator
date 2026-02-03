@@ -2,6 +2,8 @@
 # Python 3.6+ / Nornir 2.5
 import importlib
 import os
+import time
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Callable, Tuple
 from getpass import getpass, getuser
@@ -62,6 +64,10 @@ def main_task(task: Task, action: Callable[[Task, object], Result]) -> Result:
 
 
 def main() -> None:
+    # Start runtime tracking
+    start_time = time.time()
+    start_datetime = datetime.now()
+
     # ---- CLI ----
     cliargs = CliArgs()
     cliargs.parse()
@@ -164,6 +170,28 @@ def main() -> None:
     # Pretty print with Rich (uses the helper we wrote earlier)
     print("\n\n")
     print_device_table(rows)
+
+    # Calculate and display runtime
+    end_time = time.time()
+    end_datetime = datetime.now()
+    runtime_seconds = end_time - start_time
+    runtime_delta = timedelta(seconds=runtime_seconds)
+
+    # Format runtime nicely
+    hours, remainder = divmod(int(runtime_seconds), 3600)
+    minutes, seconds = divmod(remainder, 60)
+
+    print("\n" + "="*60)
+    print("Runtime Summary:")
+    print(f"  Start Time: {start_datetime.strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"  End Time:   {end_datetime.strftime('%Y-%m-%d %H:%M:%S')}")
+    if hours > 0:
+        print(f"  Duration:   {hours}h {minutes}m {seconds}s ({runtime_seconds:.2f} seconds)")
+    elif minutes > 0:
+        print(f"  Duration:   {minutes}m {seconds}s ({runtime_seconds:.2f} seconds)")
+    else:
+        print(f"  Duration:   {runtime_seconds:.2f} seconds")
+    print("="*60 + "\n")
 
 
 if __name__ == "__main__":

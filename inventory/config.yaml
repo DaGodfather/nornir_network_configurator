@@ -13,5 +13,5 @@ logging:
   enabled: true
   level: DEBUG
   file: "logs/nornir.log"
-  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-  loggers: ['nornir']
+  format: "%(asctime)s - %(name)s - %(levelname)s - Module: %(module)s - Func(%(funcName)s) - %(message)s"
+  loggers: ['nornir', 'src.actions', 'src.utils']
