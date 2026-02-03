@@ -48,7 +48,7 @@ def _pick_ntp_config_cmd(platform):
     if _is_cisco(platform):
         # Use 'include' without regex anchors for maximum compatibility
         # This will match any line containing 'ntp server', 'ntp peer', or 'ntp pool'
-        return "show run | include ntp"
+        return "show run | include ntp server"
     # Fallback: generic Cisco-ish grep
     return "show run | include ntp"
 
