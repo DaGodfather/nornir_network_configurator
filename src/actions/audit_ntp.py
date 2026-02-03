@@ -125,7 +125,13 @@ def run(task: Task, pm=None) -> Result:
         cfg_cmd = _pick_ntp_config_cmd(platform)
         logger.info(f"[{host}] Sending command: {cfg_cmd}")
 
-        r1 = task.run(task=netmiko_send_command, command_string=cfg_cmd, name="NTP config grep")
+        r1 = task.run(
+            task=netmiko_send_command,
+            command_string=cfg_cmd,
+            name="NTP config grep",
+            delay_factor=2,
+            max_loops=500
+        )
         logger.info(f"[{host}] output from command: {cfg_cmd}: \n{r1}")
         text = (_extract_text(r1) or "").strip()
 
@@ -136,7 +142,13 @@ def run(task: Task, pm=None) -> Result:
             op_cmd = _pick_ntp_operational_fallback(platform)
             logger.info(f"[{host}] Config grep empty, trying operational command: {op_cmd}")
 
-            r2 = task.run(task=netmiko_send_command, command_string=op_cmd, name="NTP operational")
+            r2 = task.run(
+                task=netmiko_send_command,
+                command_string=op_cmd,
+                name="NTP operational",
+                delay_factor=2,
+                max_loops=500
+            )
             text = (_extract_text(r2) or "").strip()
 
             logger.debug(f"[{host}] Operational command output ({len(text)} chars):\n{text}")
