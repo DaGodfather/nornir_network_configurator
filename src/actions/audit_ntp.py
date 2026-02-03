@@ -126,6 +126,7 @@ def run(task: Task, pm=None) -> Result:
         logger.info(f"[{host}] Sending command: {cfg_cmd}")
 
         r1 = task.run(task=netmiko_send_command, command_string=cfg_cmd, name="NTP config grep")
+        logger.info(f"[{host}] output from command: {cfg_cmd}")
         text = (_extract_text(r1) or "").strip()
 
         logger.debug(f"[{host}] Command output ({len(text)} chars):\n{text}")
