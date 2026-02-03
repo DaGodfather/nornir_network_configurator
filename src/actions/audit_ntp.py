@@ -162,6 +162,15 @@ def run(task: Task, pm=None) -> Result:
         status = "FAIL"
         info_text = f"Error: {str(e)}"
 
+    finally:
+        # Always close the connection to prevent hung sessions
+        try:
+            logger.debug(f"[{host}] Closing netmiko connection...")
+            task.host.close_connection("netmiko")
+            logger.debug(f"[{host}] Connection closed successfully")
+        except Exception as e:
+            logger.warning(f"[{host}] Error closing connection: {str(e)}")
+
     # Progress UI (if pm is a real manager in your setup)
     if pm is not None:
         try:

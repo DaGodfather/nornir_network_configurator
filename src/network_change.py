@@ -140,6 +140,14 @@ def main() -> None:
         for host in nr.inventory.hosts:
             pm.complete(host=host)
 
+    # Close all connections to prevent hung sessions
+    print("\nClosing all device connections...")
+    for host_name, host_obj in nr.inventory.hosts.items():
+        try:
+            host_obj.close_connections()
+        except Exception as e:
+            print(f"Warning: Failed to close connection for {host_name}: {e}")
+
     #print_result(result)
     def last_dict(mr):
         """Return the last .result that is a dict from a MultiResult (or {})."""
