@@ -35,7 +35,7 @@ def _is_juniper(platform):
 
 def _is_cisco(platform):
     p = (platform or "").lower()
-    return p in ("cisco_ios", "ios", "ios-xe", "iosxe", "cisco_nxos", "nxos")
+    return p in ("cisco_ios", "ios", "ios-xe", "iosxe", "cisco_nxos", "nxos","cisco_ios_telnet")
 
 
 def _pick_ntp_config_cmd(platform):
