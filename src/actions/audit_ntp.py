@@ -106,6 +106,21 @@ def run(task: Task, pm=None) -> Result:
         logger.info(f"[{host}] Starting NTP audit for {ip} (platform: {platform})")
 
     try:
+        # Explicitly enter enable mode for Cisco devices if enable secret is configured
+        enable_secret = task.host.data.get("enable_secret")
+        if _is_cisco(platform) and enable_secret:
+            logger.info(f"[{host}] Entering enable mode...")
+            try:
+                # Get the netmiko connection and enter enable mode
+                conn = task.host.get_connection("netmiko", task.nornir.config)
+                if not conn.check_enable_mode():
+                    conn.enable()
+                    logger.info(f"[{host}] Successfully entered enable mode")
+                else:
+                    logger.info(f"[{host}] Already in enable mode")
+            except Exception as e:
+                logger.warning(f"[{host}] Enable mode failed or not required: {str(e)}")
+
         # 1) Try concise config grep
         cfg_cmd = _pick_ntp_config_cmd(platform)
         logger.info(f"[{host}] Sending command: {cfg_cmd}")
