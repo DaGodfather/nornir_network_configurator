@@ -17,6 +17,7 @@ Behavior:
 """
 
 import logging
+import time
 from src.utils.cisco_commands import *
 from src.utils.juniper_commands import *
 from nornir.core.task import Task, Result
@@ -110,16 +111,35 @@ def run(task: Task, pm=None) -> Result:
         enable_secret = task.host.data.get("enable_secret")
         if _is_cisco(platform) and enable_secret:
             logger.info(f"[{host}] Entering enable mode...")
-            try:
-                # Get the netmiko connection and enter enable mode
-                conn = task.host.get_connection("netmiko", task.nornir.config)
-                if not conn.check_enable_mode():
-                    conn.enable()
-                    logger.info(f"[{host}] Successfully entered enable mode")
-                else:
-                    logger.info(f"[{host}] Already in enable mode")
-            except Exception as e:
-                logger.warning(f"[{host}] Enable mode failed or not required: {str(e)}")
+            enable_success = False
+
+            for attempt in range(2):  # Try twice
+                try:
+                    # Get the netmiko connection and enter enable mode
+                    conn = task.host.get_connection("netmiko", task.nornir.config)
+                    if not conn.check_enable_mode():
+                        conn.enable()
+                        logger.info(f"[{host}] Successfully entered enable mode (attempt {attempt + 1})")
+                    else:
+                        logger.info(f"[{host}] Already in enable mode (attempt {attempt + 1})")
+                    enable_success = True
+                    break  # Success, exit retry loop
+
+                except Exception as e:
+                    if attempt == 0:  # First attempt failed
+                        logger.warning(f"[{host}] Enable mode attempt 1 failed: {str(e)}")
+                        logger.info(f"[{host}] Waiting 10 seconds before retry...")
+                        time.sleep(10)
+                    else:  # Second attempt failed
+                        # Enable mode failure is FATAL for Cisco - we need privileged exec for 'show run'
+                        error_msg = f"Enable mode failed after 2 attempts: {str(e)}"
+                        logger.error(f"[{host}] {error_msg}")
+                        status = "FAIL"
+                        info_text = f"Enable mode failed - check enable password. Error: {str(e)}"
+                        raise Exception(error_msg)  # This will jump to the outer except block
+
+            if not enable_success:
+                raise Exception("Enable mode failed after retry")
 
         # 1) Try concise config grep
         cfg_cmd = _pick_ntp_config_cmd(platform)
