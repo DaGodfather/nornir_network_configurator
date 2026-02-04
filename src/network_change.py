@@ -16,6 +16,7 @@ from src.utils.table_printer import print_device_table
 from .utils.arg_parser import CliArgs
 from .utils.rich_progress import get_progress_manager
 from .utils.transport_discovery import bootstrap_transport
+from .utils.auth_test import test_authentication
 
 
 # Map CLI flags -> module name inside src/actions/
@@ -113,6 +114,20 @@ def main() -> None:
     if action_name != 'test':
         print("Creating/Updating transport_cache.json for logging into device.....")
         disc = bootstrap_transport(nr, cache_path="transport_cache.json")
+
+        # Test authentication on first device before proceeding
+        print("\n" + "="*60)
+        auth_success, auth_message = test_authentication(nr)
+        print(auth_message)
+        print("="*60)
+
+        if not auth_success:
+            print("\n❌ Authentication test failed!")
+            print("Please check your credentials and try again.")
+            print("Exiting...\n")
+            raise SystemExit(1)
+
+        print("✅ Authentication successful! Proceeding with all devices...\n")
 
     pm = get_progress_manager()
 
