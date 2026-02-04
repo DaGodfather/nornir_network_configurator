@@ -7,7 +7,7 @@ inventory:
     defaults_file: 'inventory/defaults.yaml'
 
 core:
-  num_workers: 15
+  num_workers: 12
 
 logging:
   enabled: true
