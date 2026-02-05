@@ -1,6 +1,7 @@
 # src/utils/auth_test.py
 """
-Test authentication on a single device before running bulk operations.
+Test authentication on devices before running bulk operations.
+Tries multiple devices in case the first is down or unreachable.
 Validates credentials and enable mode access.
 """
 
@@ -108,12 +109,14 @@ def test_single_device(task: Task) -> Result:
             pass
 
 
-def test_authentication(nr: Nornir) -> Tuple[bool, str]:
+def test_authentication(nr: Nornir, max_attempts: int = 3) -> Tuple[bool, str]:
     """
-    Test authentication on the first device in the inventory.
+    Test authentication on devices in the inventory.
+    Tries up to max_attempts devices in case first device is down or unreachable.
 
     Args:
         nr: Nornir instance with inventory and credentials
+        max_attempts: Maximum number of devices to try (default: 3)
 
     Returns:
         Tuple of (success: bool, message: str)
@@ -121,28 +124,62 @@ def test_authentication(nr: Nornir) -> Tuple[bool, str]:
     if not nr.inventory.hosts:
         return False, "No hosts found in inventory"
 
-    # Get first host
-    first_host_name = list(nr.inventory.hosts.keys())[0]
-    first_host = nr.inventory.hosts[first_host_name]
+    total_hosts = len(nr.inventory.hosts)
+    host_names = list(nr.inventory.hosts.keys())
 
-    print(f"\nTesting authentication on: {first_host_name} ({first_host.hostname})")
-    print("Please wait...")
+    # Limit attempts to available hosts
+    attempts = min(max_attempts, total_hosts)
 
-    # Filter to only the first host
-    test_nr = nr.filter(name=first_host_name)
+    print(f"\nTesting authentication (will try up to {attempts} device(s))...")
 
-    # Run the test
-    result = test_nr.run(task=test_single_device, name="Authentication Test")
+    failed_hosts = []
 
-    # Check result
-    if first_host_name in result:
-        host_result = result[first_host_name][0]  # Get first result
-        result_data = host_result.result
+    # Try each host until we get a successful connection
+    for i in range(attempts):
+        host_name = host_names[i]
+        host = nr.inventory.hosts[host_name]
 
-        if host_result.failed or not result_data.get("success"):
-            error = result_data.get("error", "Unknown error")
-            return False, f"Authentication test FAILED on {first_host_name}: {error}"
+        print(f"\nAttempt {i + 1}/{attempts}: {host_name} ({host.hostname})")
+        print("Please wait...")
+
+        # Filter to only this host
+        test_nr = nr.filter(name=host_name)
+
+        # Run the test
+        result = test_nr.run(task=test_single_device, name="Authentication Test")
+
+        # Check result
+        if host_name in result:
+            host_result = result[host_name][0]  # Get first result
+            result_data = host_result.result
+
+            if host_result.failed or not result_data.get("success"):
+                error = result_data.get("error", "Unknown error")
+                failed_hosts.append((host_name, error))
+                print(f"❌ FAILED on {host_name}: {error}")
+
+                # If this isn't the last attempt, try next host
+                if i < attempts - 1:
+                    print(f"Trying next device...")
+                    continue
+            else:
+                # Success! Return immediately
+                success_msg = f"Authentication test PASSED on {host_name}"
+                if failed_hosts:
+                    # Mention that previous hosts failed
+                    failed_list = ", ".join([f"{h[0]}" for h in failed_hosts])
+                    success_msg += f"\n(Previous attempts failed on: {failed_list})"
+                return True, success_msg
         else:
-            return True, f"Authentication test PASSED on {first_host_name}"
-    else:
-        return False, f"No result returned for {first_host_name}"
+            error = f"No result returned for {host_name}"
+            failed_hosts.append((host_name, error))
+            print(f"❌ FAILED on {host_name}: {error}")
+
+            # If this isn't the last attempt, try next host
+            if i < attempts - 1:
+                print(f"Trying next device...")
+                continue
+
+    # All attempts failed
+    failed_summary = "\n".join([f"  - {h[0]}: {h[1]}" for h in failed_hosts])
+    return False, f"Authentication test FAILED on all {attempts} device(s):\n{failed_summary}"
