@@ -206,14 +206,6 @@ def run(task: Task, pm=None) -> Result:
         except Exception as e:
             logger.warning(f"[{host}] Error closing connection: {str(e)}")
 
-    # Progress UI (if pm is a real manager in your setup)
-    if pm is not None:
-        try:
-            pm.advance(host=host)
-            pm.update(host=host, description="Completed")
-        except Exception:
-            pass
-
     """
     This section is for reporting and requires to send back a dictionary. The following format must be returned
 

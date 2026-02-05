@@ -416,14 +416,6 @@
         status = "OK" if success_all else "FAIL"
         info = "ACL updated" if success_all else "ACL not updated"
 
-        # Progress UI
-        if pm is not None:
-            try:
-                pm.advance(host=host)
-                pm.update(host=host, description="Completed")
-            except Exception:
-                pass
-
         row = {
             "device": host,
             "ip": ip,

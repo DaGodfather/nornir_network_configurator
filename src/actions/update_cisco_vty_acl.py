@@ -370,22 +370,12 @@ def run(task, pm, dry_run=False):
         "info": ""
     }
     
-    # Progress update
-    if pm is not None:
-        try:
-            pm.update(host=host, description="Starting ACL update")
-        except Exception:
-            pass
-    
+    # Progress update    
     # ---- Pre-flight checks ----
     
     # 1. Verify this is a Cisco device
     if not _is_cisco(platform):
-        row["info"] = "Skipped - Not a Cisco device"
-        if pm:
-            try:
-                pm.advance(host=host)
-                pm.update(host=host, description="Skipped (non-Cisco)")
+        row["info"] = "Skipped - Not a Cisco device"                pm.update(host=host, description="Skipped (non-Cisco)")
             except Exception:
                 pass
         return Result(host=task.host, changed=False, result=row)
@@ -424,13 +414,7 @@ def run(task, pm, dry_run=False):
     # ---- Connect and execute ----
     
     try:
-        # 3. Get current running config for ACL
-        if pm:
-            try:
-                pm.update(host=host, description="Checking ACL existence")
-            except Exception:
-                pass
-        
+        # 3. Get current running config for ACL        
         result = task.run(task=netmiko_send_command, command_string="show run | section ip access-list standard {}".format(_ACL_NAME))
         config_output = result.result
         
@@ -448,13 +432,7 @@ def run(task, pm, dry_run=False):
         # Parse existing ACL entries
         existing_entries = parse_acl_from_config(config_output, _ACL_NAME)
         
-        # 5. Check if entries already exist
-        if pm:
-            try:
-                pm.update(host=host, description="Checking for duplicates")
-            except Exception:
-                pass
-        
+        # 5. Check if entries already exist        
         all_exist, duplicates = check_entries_already_exist(existing_entries, _NEW_ENTRIES)
         if all_exist:
             row["status"] = "Success"
@@ -467,13 +445,7 @@ def run(task, pm, dry_run=False):
                     pass
             return Result(host=task.host, changed=False, result=row)
         
-        # 6. Verify ACL is on vty lines
-        if pm:
-            try:
-                pm.update(host=host, description="Verifying vty lines")
-            except Exception:
-                pass
-        
+        # 6. Verify ACL is on vty lines        
         vty_ok, vty_msg, vty_04_acl, vty_515_acl = verify_acl_on_vty_lines(task, _ACL_NAME)
         if not vty_ok:
             row["info"] = "Pre-check Failed" if dry_run else vty_msg
@@ -526,32 +498,14 @@ def run(task, pm, dry_run=False):
         
         # ---- Regular mode: apply changes ----
         
-        # 7. Remove ACL from vty lines
-        if pm:
-            try:
-                pm.update(host=host, description="Removing ACL from vty lines")
-            except Exception:
-                pass
-        
+        # 7. Remove ACL from vty lines        
         remove_acl_from_vty(task, "0 4", _ACL_NAME)
         remove_acl_from_vty(task, "5 15", _ACL_NAME)
         
-        # 8. Update ACL
-        if pm:
-            try:
-                pm.update(host=host, description="Updating ACL")
-            except Exception:
-                pass
-        
+        # 8. Update ACL        
         update_acl(task, _ACL_NAME, new_acl_entries)
         
-        # 9. Verify ACL update
-        if pm:
-            try:
-                pm.update(host=host, description="Verifying ACL update")
-            except Exception:
-                pass
-        
+        # 9. Verify ACL update        
         verify_ok, verify_msg = verify_acl_update(task, _ACL_NAME, new_acl_entries)
         if not verify_ok:
             row["info"] = "ACL didn't update properly"
@@ -563,27 +517,14 @@ def run(task, pm, dry_run=False):
                     pass
             return Result(host=task.host, changed=True, failed=True, result=row)
         
-        # 10. Re-apply ACL to vty lines
-        if pm:
-            try:
-                pm.update(host=host, description="Re-applying ACL to vty lines")
-            except Exception:
-                pass
-        
+        # 10. Re-apply ACL to vty lines        
         apply_acl_to_vty(task, "0 4", _ACL_NAME)
         apply_acl_to_vty(task, "5 15", _ACL_NAME)
         
         # Success!
         row["status"] = "Success"
         row["info"] = "ACL has been updated"
-        
-        if pm:
-            try:
-                pm.advance(host=host)
-                pm.update(host=host, description="Completed")
-            except Exception:
-                pass
-        
+                
         return Result(host=task.host, changed=True, result=row)
         
     except Exception as e:
@@ -593,11 +534,7 @@ def run(task, pm, dry_run=False):
             row["info"] = "Authentication failed: {}".format(error_msg)
         else:
             row["info"] = "Pre-check Failed" if dry_run else "Error: {}".format(error_msg)
-        
-        if pm:
-            try:
-                pm.advance(host=host)
-                pm.update(host=host, description="Failed (error)")
+                        pm.update(host=host, description="Failed (error)")
             except Exception:
                 pass
         

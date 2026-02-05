@@ -103,10 +103,18 @@ def save_results_to_csv(rows, action_name, output_dir="output"):
         print(f"⚠️  Warning: Failed to save CSV: {str(e)}")
 
 
-def main_task(task: Task, action: Callable[[Task, object], Result]) -> Result:
-    """Nornir task wrapper that hands None to the action (progress tracked centrally)."""
-    # Don't pass progress manager to individual actions since we're tracking overall progress
-    return action(task, None)
+def main_task(task: Task, action: Callable[[Task, object], Result], pm=None) -> Result:
+    """Nornir task wrapper that passes progress manager to the action for real-time updates."""
+    result = action(task, pm)
+
+    # Update progress after task completes
+    if pm is not None:
+        try:
+            pm.advance(host=f"Overall Progress")
+        except Exception:
+            pass
+
+    return result
 
 
 def main() -> None:
@@ -198,30 +206,19 @@ def main() -> None:
     with pm:
         # Add one task for overall progress (not per-host)
         overall_task = pm.add_task(
-            host=f"Overall Progress ({device_count} devices)",
+            host=f"Overall Progress",
             total=device_count,
-            description=f"Running {action_name}",
+            description=f"Running {action_name} - 0/{device_count} complete",
             platform="",
         )
 
-        # Track completed devices
-        completed_count = 0
-
-        # (connection options already set)
+        # Run tasks with progress manager for real-time updates
         result = nr.run(
             name="Action: {}".format(action_name),
             task=main_task,
             action=action_fn,  # passed into main_task(**kwargs)
+            pm=pm,  # Pass progress manager for real-time updates
         )
-
-        # Update progress bar as devices complete
-        for host in nr.inventory.hosts:
-            completed_count += 1
-            pm.update(
-                host=f"Overall Progress ({device_count} devices)",
-                completed=completed_count,
-                description=f"Running {action_name} - {completed_count}/{device_count} complete"
-            )
 
     # Close all connections to prevent hung sessions
     print("\nClosing all device connections...")

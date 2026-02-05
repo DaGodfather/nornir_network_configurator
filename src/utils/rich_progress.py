@@ -29,6 +29,9 @@ class ProgressManager:
         # Maps: host -> task_id
         self._host_to_task: Dict[str, "TaskID"] = {}
         self._running = False
+        # Track completed count for overall progress description updates
+        self._completed_count: Dict[str, int] = {}
+        self._total_count: Dict[str, int] = {}
 
     # --- lifecycle ---------------------------------------------------------
 
@@ -88,6 +91,11 @@ class ProgressManager:
             **fields  # extra fields available as task.fields[<name>]
         )
         self._host_to_task[host] = task_id
+
+        # Initialize counters for overall progress tracking
+        self._completed_count[host] = 0
+        self._total_count[host] = int(total) if total else 0
+
         return task_id
 
     def update(
@@ -121,7 +129,35 @@ class ProgressManager:
     def advance(self, host: Optional[str] = None, task_id: Optional["TaskID"] = None, step: float = 1.0) -> None:
         """
         Convenience: advance a task by a step.
+        For overall progress tasks, also updates the description with completed/total count.
         """
+        # Update completed count if this is an overall progress task
+        if host and host in self._completed_count:
+            self._completed_count[host] += int(step)
+            total = self._total_count.get(host, 0)
+            completed = self._completed_count[host]
+
+            # Extract the action name from the current description if available
+            tid = self._resolve_task_id(host, task_id)
+            if tid is not None:
+                current_task = self._progress.tasks[tid]
+                desc = current_task.description
+
+                # Try to extract action name from description (e.g., "Running update_cisco_local_credentials")
+                action_name = "task"
+                if desc and "Running " in desc:
+                    parts = desc.split("Running ", 1)
+                    if len(parts) > 1:
+                        action_name_part = parts[1].split(" - ")[0]
+                        if action_name_part:
+                            action_name = action_name_part
+
+                # Update with new description showing progress
+                new_desc = f"Running {action_name} - {completed}/{total} complete"
+                self.update(host=host, task_id=task_id, advance=step, description=new_desc)
+                return
+
+        # Standard advance without description update
         self.update(host=host, task_id=task_id, advance=step)
 
     def complete(self, host: Optional[str] = None, task_id: Optional["TaskID"] = None) -> None:

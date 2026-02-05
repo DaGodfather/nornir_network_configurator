@@ -398,14 +398,6 @@ def run(task: Task, pm=None) -> Result:
         except Exception as e:
             logger.warning(f"[{host}] Error closing connection: {str(e)}")
 
-    # Progress UI
-    if pm is not None:
-        try:
-            pm.advance(host=host)
-            pm.update(host=host, description="Completed")
-        except Exception:
-            pass
-
     # Build result row
     row = {
         "device": host,

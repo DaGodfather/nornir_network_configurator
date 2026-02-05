@@ -103,14 +103,6 @@ def run(task: Task, pm=None) -> Result:
         status = "OK"
         info_text = "Not applicable (Junos uses firewall filters / system services)"
 
-    # Progress UI (if pm is a real manager in your setup)
-    if pm is not None:
-        try:
-            pm.advance(host=host)
-            pm.update(host=host, description="Completed")
-        except Exception:
-            pass
-
     row = {
         "device": host,
         "ip": ip,

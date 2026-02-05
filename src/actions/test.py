@@ -48,8 +48,6 @@ def run(task: Task, pm) -> Result:
     host = task.host.name
     platform = (task.host.platform or "").lower()
 
-    pm.update(host=host, description="Auditing NTP")
-
     if _is_juniper(platform):
         cmd = "show configuration | display json"
     else:  # default Cisco-style (covers Cisco + unknowns)
@@ -67,9 +65,6 @@ def run(task: Task, pm) -> Result:
     except Exception as e:
         failed = True
         out = "Command '{}' failed: {}".format(cmd, e)
-
-    pm.advance(host=host)
-    pm.update(host=host, description="Completed" if not failed else "Failed")
 
     """
     This section is for reporting and requires to send back a dictionary. The following format must be returned
