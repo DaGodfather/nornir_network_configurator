@@ -2,3 +2,5 @@
 logs/nornir.log*
 __pycache__
 inventory/hosts.yaml
+output/*.csv
+transport_cache.json

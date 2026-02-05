@@ -2,6 +2,7 @@
 # Python 3.6+ / Nornir 2.5
 import importlib
 import os
+import csv
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -56,6 +57,48 @@ def choose_action(args) -> Tuple[Callable[[Task, object], Result], str]:
         raise ValueError("Each action module must define: run(task, pm) -> Result")
 
     return getattr(module, "run"), action_flag
+
+
+def save_results_to_csv(rows, action_name, output_dir="output"):
+    """
+    Save results to CSV file in the output directory.
+
+    Args:
+        rows: List of dictionaries containing results
+        action_name: Name of the action that was run
+        output_dir: Directory to save CSV file (default: 'output')
+    """
+    if not rows:
+        print("No results to save to CSV.")
+        return
+
+    # Create output directory if it doesn't exist
+    output_path = Path(output_dir)
+    output_path.mkdir(exist_ok=True)
+
+    # Generate filename
+    csv_filename = output_path / "network_change_results.csv"
+
+    try:
+        # Get all possible keys from all rows (in case some rows have different keys)
+        all_keys = set()
+        for row in rows:
+            all_keys.update(row.keys())
+
+        # Sort keys for consistent column order
+        fieldnames = sorted(all_keys)
+
+        # Write to CSV
+        with open(csv_filename, 'w', newline='') as csvfile:
+            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(rows)
+
+        print(f"✅ Results saved to: {csv_filename}")
+        print(f"   Total records: {len(rows)}")
+
+    except Exception as e:
+        print(f"⚠️  Warning: Failed to save CSV: {str(e)}")
 
 
 def main_task(task: Task, action: Callable[[Task, object], Result]) -> Result:
@@ -193,6 +236,9 @@ def main() -> None:
     # Pretty print with Rich (uses the helper we wrote earlier)
     print("\n\n")
     print_device_table(rows)
+
+    # Save results to CSV
+    save_results_to_csv(rows, action_name)
 
     # Calculate and display runtime
     end_time = time.time()
