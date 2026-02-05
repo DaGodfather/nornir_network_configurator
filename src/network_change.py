@@ -32,6 +32,7 @@ ACTION_MAP = {
     "update_local_passowrd": "update_local_passowrd",
     "update_tacacs":         "update_tacacs",
     "update_cisco_vty_acl":   "update_cisco_vty_acl",
+    "update_cisco_local_credentials": "update_cisco_local_credentials",
     "from_text_file":        "from_text_file",
     "test":                  "test",
 

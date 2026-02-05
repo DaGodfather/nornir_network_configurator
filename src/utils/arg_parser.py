@@ -18,6 +18,7 @@ class CliArgs:
         self.parser.add_argument("-update_tacacs", action="store_true", help="Update TACACS to new standard config")
         self.parser.add_argument("-from_text_file", action="store_true", help="audit TACACS to new standard config")
         self.parser.add_argument("-update_cisco_vty_acl", action="store_true", help="Update Cisco ACL using 'input/acl_entries.txt' file")
+        self.parser.add_argument("-update_cisco_local_credentials", action="store_true", help="Update Cisco local credentials using 'playbooks/cisco_local_credentials.txt' file")
         self.parser.add_argument("-dry_run", action="store_true", help="Used for dry, no all actions support this") #This is not in the CLI mapping
         self.parser.add_argument("-test", action="store_true", help="Test action items will be called.")
 
