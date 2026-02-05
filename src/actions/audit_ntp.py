@@ -129,7 +129,7 @@ def run(task: Task, pm=None) -> Result:
                     if attempt == 0:  # First attempt failed
                         logger.warning(f"[{host}] Enable mode attempt 1 failed: {str(e)}")
                         logger.info(f"[{host}] Waiting 10 seconds before retry...")
-                        time.sleep(10)
+                        time.sleep(15)
                     else:  # Second attempt failed
                         # Enable mode failure is FATAL for Cisco - we need privileged exec for 'show run'
                         error_msg = f"Enable mode failed after 2 attempts: {str(e)}"
