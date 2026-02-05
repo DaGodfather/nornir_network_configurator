@@ -103,9 +103,9 @@ def save_results_to_csv(rows, action_name, output_dir="output"):
 
 
 def main_task(task: Task, action: Callable[[Task, object], Result]) -> Result:
-    """Nornir task wrapper that hands the ProgressManager to the action."""
-    pm = get_progress_manager()
-    return action(task, pm)
+    """Nornir task wrapper that hands None to the action (progress tracked centrally)."""
+    # Don't pass progress manager to individual actions since we're tracking overall progress
+    return action(task, None)
 
 
 def main() -> None:
@@ -140,8 +140,7 @@ def main() -> None:
         # Store enable secret in host data for use by connection options
         host.data["enable_secret"] = enable_secret
 
-    tasks = len(nr.inventory.hosts)
-    print("\nRunning task on {} device(s)".format(tasks))
+    device_count = len(nr.inventory.hosts)
 
     # ---- Select action ----
     try:
@@ -149,9 +148,15 @@ def main() -> None:
     except ValueError as e:
         print("Error: {}".format(e))
         raise SystemExit(2)
-    
+
     # Clear the screen.
     os.system("clear")
+
+    # Display action and device count
+    print("\n" + "="*60)
+    print(f"Action: {action_name}")
+    print(f"Devices: {device_count} device(s) will be processed")
+    print("="*60 + "\n")
 
     # if not test, create cache for transport type
     # Pre-stage: apply cached decisions and discover for unknown hosts
@@ -173,21 +178,26 @@ def main() -> None:
 
         print("✅ Authentication successful! Proceeding with all devices...\n")
 
-    pm = get_progress_manager()
-
     # Print test banner/message if this is a test run.
     if action_name == "test":
         print("\n\nThis is only a TEST!!\n\n")
 
-    # One row per host (total=1 => per-host unit of work)
+    # Create a single progress bar for overall completion
+    pm = get_progress_manager()
+
+    # Single progress bar tracking overall completion
     with pm:
-        for host in nr.inventory.hosts.values():
-            pm.add_task(
-                host=host.name,
-                total=1,
-                description="Queued ({})".format(action_name),
-                platform=str(host.platform or ""),
-            )
+        # Add one task for overall progress (not per-host)
+        overall_task = pm.add_task(
+            host=f"Overall Progress ({device_count} devices)",
+            total=device_count,
+            description=f"Running {action_name}",
+            platform="",
+        )
+
+        # Track completed devices
+        completed_count = 0
+
         # (connection options already set)
         result = nr.run(
             name="Action: {}".format(action_name),
@@ -195,9 +205,14 @@ def main() -> None:
             action=action_fn,  # passed into main_task(**kwargs)
         )
 
-        # Ensure rows show complete
+        # Update progress bar as devices complete
         for host in nr.inventory.hosts:
-            pm.complete(host=host)
+            completed_count += 1
+            pm.update(
+                host=f"Overall Progress ({device_count} devices)",
+                completed=completed_count,
+                description=f"Running {action_name} - {completed_count}/{device_count} complete"
+            )
 
     # Close all connections to prevent hung sessions
     print("\nClosing all device connections...")
