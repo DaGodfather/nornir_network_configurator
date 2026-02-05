@@ -1,0 +1,19 @@
+# Device Filter List
+# This file is used to filter which devices from hosts.yaml will be processed
+# One device name per line (must match the device name in hosts.yaml)
+# Lines starting with # are comments and will be ignored
+# Empty lines are ignored
+
+# Example devices:
+edge1
+core-sw1
+dist-sw1
+
+# You can comment out devices to exclude them:
+# access-sw1
+
+# To use this file in production:
+# 1. Copy this file to device_filter_list.txt
+# 2. Add your device names (one per line)
+# 3. Run the script - it will only process devices listed here
+# 4. Any devices not found in hosts.yaml will be reported at the end

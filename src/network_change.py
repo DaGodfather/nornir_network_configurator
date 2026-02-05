@@ -18,6 +18,7 @@ from .utils.arg_parser import CliArgs
 from .utils.rich_progress import get_progress_manager
 from .utils.transport_discovery import bootstrap_transport
 from .utils.auth_test import test_authentication
+from .utils.device_filter import apply_device_filter
 
 
 # Map CLI flags -> module name inside src/actions/
@@ -133,6 +134,10 @@ def main() -> None:
     # ---- Nornir init (2.5) ----
     nr = InitNornir(config_file=str(config_path))
 
+    # ---- Apply device filter (if filter file exists) ----
+    total_inventory = len(nr.inventory.hosts)
+    nr, not_found_devices = apply_device_filter(nr, filter_file="inventory/device_filter_list.txt")
+
     # Set creds on each host
     for host in nr.inventory.hosts.values():
         host.username = username
@@ -155,7 +160,11 @@ def main() -> None:
     # Display action and device count
     print("\n" + "="*60)
     print(f"Action: {action_name}")
-    print(f"Devices: {device_count} device(s) will be processed")
+    print(f"Total inventory: {total_inventory} device(s)")
+    if device_count < total_inventory:
+        print(f"Filtered to: {device_count} device(s) (using device_filter_list.txt)")
+    else:
+        print(f"Devices: {device_count} device(s) will be processed")
     print("="*60 + "\n")
 
     # if not test, create cache for transport type
@@ -277,6 +286,22 @@ def main() -> None:
     else:
         print(f"  Duration:   {runtime_seconds:.2f} seconds")
     print("="*60 + "\n")
+
+    # Display devices not found in inventory (if any)
+    if not_found_devices:
+        print("="*60)
+        print("⚠️  WARNING: Devices Not Found in Inventory")
+        print("="*60)
+        print(f"The following {len(not_found_devices)} device(s) from device_filter_list.txt")
+        print("were NOT found in inventory/hosts.yaml:")
+        print()
+        for device in sorted(not_found_devices):
+            print(f"  - {device}")
+        print()
+        print("These devices were skipped. Please verify device names in:")
+        print("  - inventory/device_filter_list.txt")
+        print("  - inventory/hosts.yaml")
+        print("="*60 + "\n")
 
 
 if __name__ == "__main__":

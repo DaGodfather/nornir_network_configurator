@@ -8,3 +8,6 @@ transport_cache.json
 # Ignore production playbook files, but keep examples
 playbooks/*.txt
 !playbooks/*.example.txt
+
+# Ignore production device filter list, but keep example
+inventory/device_filter_list.txt
