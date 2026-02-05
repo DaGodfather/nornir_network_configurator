@@ -4,3 +4,7 @@ __pycache__
 inventory/hosts.yaml
 output/*.csv
 transport_cache.json
+
+# Ignore production playbook files, but keep examples
+playbooks/*.txt
+!playbooks/*.example.txt

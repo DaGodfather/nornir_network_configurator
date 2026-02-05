@@ -1,0 +1,19 @@
+# Syslog Configuration Example
+# This file defines the syslog servers and settings that should be configured on network devices
+# Format: One syslog command per line
+# Lines starting with # are comments and will be ignored
+
+# Syslog servers
+logging host 10.10.10.1
+logging host 10.10.10.2
+
+# Syslog settings
+logging trap informational
+logging facility local6
+logging source-interface Loopback0
+
+# Optional: Buffered logging
+# logging buffered 16384 informational
+
+# Optional: Console logging
+# logging console warnings

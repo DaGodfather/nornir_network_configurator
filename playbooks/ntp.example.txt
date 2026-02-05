@@ -1,0 +1,16 @@
+# NTP Configuration Example
+# This file defines the NTP servers that should be configured on network devices
+# Format: One NTP server per line
+# Lines starting with # are comments and will be ignored
+
+# Primary NTP servers
+ntp server 10.1.1.1
+ntp server 10.1.1.2
+
+# Secondary NTP servers
+ntp server 10.2.2.1
+ntp server 10.2.2.2
+
+# Public NTP pool (optional)
+# ntp server time.nist.gov
+# ntp server pool.ntp.org
