@@ -20,6 +20,7 @@ import logging
 import time
 from src.utils.cisco_commands import *
 from src.utils.juniper_commands import *
+from src.utils.csv_sanitizer import sanitize_for_csv, sanitize_error_message
 from nornir.core.task import Task, Result
 from nornir.plugins.tasks.networking import netmiko_send_command
 from netmiko.ssh_exception import NetmikoAuthenticationException, NetmikoTimeoutException
@@ -175,7 +176,9 @@ def run(task: Task, pm=None) -> Result:
 
         # 3) Decide status & build the row
         status = "OK" if text else "FAIL"
-        info_text = text if text else "No NTP lines returned"
+
+        # Sanitize info_text for CSV compatibility
+        info_text = sanitize_for_csv(text) if text else "No NTP lines returned"
 
         logger.info(f"[{host}] Audit complete - Status: {status}")
 
@@ -192,7 +195,7 @@ def run(task: Task, pm=None) -> Result:
     except Exception as e:
         logger.error(f"[{host}] Unexpected error: {str(e)}", exc_info=True)
         status = "FAIL"
-        info_text = f"Error: {str(e)}"
+        info_text = f"Audit failed - {sanitize_error_message(e)}"
 
     finally:
         # Always close the connection to prevent hung sessions

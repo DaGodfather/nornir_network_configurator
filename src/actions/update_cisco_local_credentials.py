@@ -24,6 +24,7 @@ import time
 import re
 from pathlib import Path
 from typing import List, Dict, Tuple
+from src.utils.csv_sanitizer import sanitize_error_message
 from nornir.core.task import Task, Result
 from nornir.plugins.tasks.networking import netmiko_send_command, netmiko_send_config
 from netmiko.ssh_exception import NetmikoAuthenticationException, NetmikoTimeoutException
@@ -386,7 +387,7 @@ def run(task: Task, pm=None) -> Result:
     except Exception as e:
         logger.error(f"[{host}] Unexpected error: {str(e)}", exc_info=True)
         status = "FAIL"
-        info_text = f"Error: {str(e)}"
+        info_text = f"Update was unsuccessful - {sanitize_error_message(e)}"
 
     finally:
         # Always close the connection to prevent hung sessions
