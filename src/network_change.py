@@ -242,20 +242,34 @@ def main() -> None:
 
     rows = []
 
-    for host, mr in result.items():        # mr is a MultiResult for this host
-        payload = last_dict(mr)            # this is your {'device':..., 'ip':...} dict
-        if not payload:                    # fallback if action didn't return a dict
-            payload = {
-                "device": host,
-                "ip": nr.inventory.hosts[host].hostname or "",
-                "platform": nr.inventory.hosts[host].platform or "",
-                "model": (nr.inventory.hosts[host].data or {}).get("model", "N/A"),
-                "status": "FAIL" if mr.failed else "OK",
-                "info": "",
-            }
+    # Ensure ALL hosts from inventory are in results (even if execution failed completely)
+    for host_name in nr.inventory.hosts:
+        if host_name in result:
+            # Host was executed - get its result
+            mr = result[host_name]
+            payload = last_dict(mr)            # this is your {'device':..., 'ip':...} dict
+            if not payload:                    # fallback if action didn't return a dict
+                payload = {
+                    "device": host_name,
+                    "ip": nr.inventory.hosts[host_name].hostname or "",
+                    "platform": nr.inventory.hosts[host_name].platform or "",
+                    "model": (nr.inventory.hosts[host_name].data or {}).get("model", "N/A"),
+                    "status": "FAIL" if mr.failed else "OK",
+                    "info": "",
+                }
+            else:
+                # ensure status reflects execution outcome, if you want:
+                payload.setdefault("status", "FAIL" if mr.failed else "OK")
         else:
-            # ensure status reflects execution outcome, if you want:
-            payload.setdefault("status", "FAIL" if mr.failed else "OK")
+            # Host was NOT executed at all - create FAIL entry
+            payload = {
+                "device": host_name,
+                "ip": nr.inventory.hosts[host_name].hostname or "",
+                "platform": nr.inventory.hosts[host_name].platform or "",
+                "model": (nr.inventory.hosts[host_name].data or {}).get("model", "N/A"),
+                "status": "FAIL",
+                "info": "Device was not executed - check logs for details",
+            }
         rows.append(payload)
 
     # Pretty print with Rich (uses the helper we wrote earlier)
