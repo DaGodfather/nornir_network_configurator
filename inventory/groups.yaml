@@ -3,7 +3,7 @@ cisco:
   connection_options:
     netmiko:
       extras:
-        fast_cli: true
+        fast_cli: false
         # If you need enable (privileged) mode on IOS/IOS-XE/IOS-XR:
         # secret: "YOUR_ENABLE_PASSWORD"
         # Optional session logs (ensure the directory exists or remove this):
