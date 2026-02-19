@@ -3,6 +3,7 @@
 Test authentication on devices before running bulk operations.
 Tries multiple devices in case the first is down or unreachable.
 Validates credentials and enable mode access.
+If SSH fails with a banner/protocol error, clears the cache and retries via Telnet.
 """
 
 import logging
@@ -10,6 +11,9 @@ from typing import Tuple, Optional
 from nornir.core import Nornir
 from nornir.core.task import Task, Result
 from nornir.plugins.tasks.networking import netmiko_send_command
+from src.utils.transport_discovery import (
+    apply_conn, load_cache, save_cache, platform_to_netmiko_types, is_port_open
+)
 
 logger = logging.getLogger(__name__)
 
@@ -92,12 +96,27 @@ def test_single_device(task: Task) -> Result:
             )
 
     except Exception as e:
-        error_msg = f"Authentication test failed: {str(e)}"
+        error_str = str(e)
+        # Detect broken SSH stack (device accepts TCP/22 but drops connection).
+        # Flag it so test_authentication() can clear the cache and retry via Telnet.
+        ssh_banner_keywords = (
+            "Error reading SSH protocol banner",
+            "kex_exchange_identification",
+            "Connection closed by remote host",
+            "SSH negotiation failed",
+        )
+        is_ssh_banner_error = any(kw.lower() in error_str.lower() for kw in ssh_banner_keywords)
+
+        error_msg = f"Authentication test failed: {error_str}"
         logger.error(f"[{host}] {error_msg}", exc_info=True)
         return Result(
             host=task.host,
             failed=True,
-            result={"success": False, "error": error_msg}
+            result={
+                "success": False,
+                "error": error_msg,
+                "ssh_banner_error": is_ssh_banner_error,
+            }
         )
 
     finally:
@@ -155,6 +174,49 @@ def test_authentication(nr: Nornir, max_attempts: int = 3) -> Tuple[bool, str]:
 
             if host_result.failed or not result_data.get("success"):
                 error = result_data.get("error", "Unknown error")
+
+                # Detect broken SSH stack - clear cache and retry via Telnet on same host
+                if result_data.get("ssh_banner_error"):
+                    print(f"⚠️  SSH banner failure on {host_name} - SSH port is open but broken.")
+                    print(f"   Falling back to Telnet for {host_name}...")
+                    logger.warning(f"[{host_name}] SSH banner error detected - attempting Telnet fallback")
+
+                    host_obj = nr.inventory.hosts[host_name]
+                    ip = str(host_obj.hostname)
+                    _, telnet_type = platform_to_netmiko_types(host_obj.platform)
+
+                    if telnet_type and is_port_open(ip, 23, timeout=2.0):
+                        # Switch to Telnet in-memory
+                        apply_conn(host_obj, telnet_type, 23)
+                        host_obj["mgmt_transport"] = "telnet"
+                        host_obj["device_type"] = telnet_type
+                        host_obj["port"] = 23
+
+                        # Update cache so future runs use Telnet for this device
+                        cache = load_cache("transport_cache.json")
+                        cache[host_name] = {"transport": "telnet", "device_type": telnet_type, "port": 23}
+                        save_cache(cache, "transport_cache.json")
+                        logger.info(f"[{host_name}] Cache updated to Telnet")
+
+                        # Retry the auth test on the same host with Telnet
+                        print(f"   Retrying authentication via Telnet...")
+                        retry_nr = nr.filter(name=host_name)
+                        retry_result = retry_nr.run(task=test_single_device, name="Authentication Test (Telnet)")
+                        if host_name in retry_result:
+                            retry_host_result = retry_result[host_name][0]
+                            retry_data = retry_host_result.result
+                            if not retry_host_result.failed and retry_data.get("success"):
+                                success_msg = f"Authentication test PASSED on {host_name} (via Telnet fallback)"
+                                if failed_hosts:
+                                    failed_list = ", ".join([f"{h[0]}" for h in failed_hosts])
+                                    success_msg += f"\n(Previous attempts failed on: {failed_list})"
+                                return True, success_msg
+                            else:
+                                error = retry_data.get("error", "Unknown error")
+                                print(f"❌ Telnet fallback also FAILED on {host_name}: {error}")
+                    else:
+                        print(f"   Telnet (port 23) is not available on {host_name}.")
+
                 failed_hosts.append((host_name, error))
                 print(f"❌ FAILED on {host_name}: {error}")
 

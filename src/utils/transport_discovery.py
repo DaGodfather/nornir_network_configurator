@@ -147,6 +147,20 @@ def apply_cache_to_inventory(nr: Any, cache_path: str = CACHE_PATH) -> None:
         host["port"] = int(rec["port"])
 
 
+SSH_BANNER_ERRORS = (
+    "Error reading SSH protocol banner",
+    "kex_exchange_identification",
+    "Connection closed by remote host",
+    "No existing session",
+    "SSH negotiation failed",
+)
+
+
+def _ssh_banner_failure(error_str: str) -> bool:
+    """Return True if the error looks like a broken SSH stack (not auth failure)."""
+    return any(msg.lower() in error_str.lower() for msg in SSH_BANNER_ERRORS)
+
+
 def discover_and_set(task: Task, prefer_ssh_when_both_open: bool = True, probe_timeout: float = 0.7) -> Result:
     """
     Nornir Task: probe a host, choose transport, and set connection options on the host.
@@ -155,6 +169,7 @@ def discover_and_set(task: Task, prefer_ssh_when_both_open: bool = True, probe_t
       1) If host already has 'mgmt_transport' (from cache), exits quickly.
       2) Probes TCP/22 and (if supported) TCP/23.
       3) Picks SSH if both are open and `prefer_ssh_when_both_open` is True.
+         If SSH is selected but fails with a banner/protocol error, falls back to Telnet.
       4) Applies the chosen port & device_type to host.connection_options["netmiko"].
       5) Stores metadata on the host: 'mgmt_transport', 'device_type', 'port'.
 
@@ -191,6 +206,24 @@ def discover_and_set(task: Task, prefer_ssh_when_both_open: bool = True, probe_t
         transport, device_type, port = "ssh", ssh_type, 22
     else:
         transport, device_type, port = "telnet", telnet_type, 23  # tel_open must be True here
+
+    # If SSH was chosen, verify the banner actually works - some old devices accept
+    # TCP/22 but have a broken SSH stack (drops with banner error). Fall back to Telnet.
+    if transport == "ssh" and tel_open:
+        try:
+            import socket as _socket
+            # Attempt to read a few bytes of the SSH banner (should start with "SSH-")
+            s = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
+            s.settimeout(3.0)
+            s.connect((ip, 22))
+            banner = s.recv(64).decode("utf-8", errors="ignore")
+            s.close()
+            if not banner.startswith("SSH-"):
+                # Port 22 accepted but not a real SSH banner - fall back to Telnet
+                transport, device_type, port = "telnet", telnet_type, 23
+        except Exception:
+            # Could not read banner - fall back to Telnet if available
+            transport, device_type, port = "telnet", telnet_type, 23
 
     # Apply to this host for the remainder of the run
     apply_conn(task, device_type, port)
