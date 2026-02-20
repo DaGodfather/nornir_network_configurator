@@ -1,541 +1,484 @@
-# src/actions/update_cisco_acl.py
+# src/actions/update_cisco_vty_acl.py
 # Python 3.6+ / Nornir 2.5
 
 """
-Update Cisco standard ACL with new entries from an input file.
+Update Cisco VTY ACL based on playbook configuration.
 
 This module conforms to app_main.py's expectations:
 - It defines `run(task, pm)` -> Result
 - It returns a Result whose `.result` is a dict with keys:
-    device, ip, platform, model, status("Success"/"Failed"), info(<message>)
+    device, ip, platform, model, status("OK"/"FAIL"), info(<status message>)
 
 Behavior:
-1) Read new ACL entries from input/acl_entries.txt
-2) Prompt user for target ACL name and insertion position
-3) For each Cisco device:
-   - Verify ACL exists
-   - Check if entries already exist
-   - Verify ACL is applied to vty 0 4 and vty 5 15
-   - Remove ACL from vty lines
-   - Update ACL with new entries at specified position
-   - Verify new ACL configuration
-   - Re-apply ACL to vty lines
-
-Dry-run mode (--dry-run):
-- Performs all pre-checks without making changes
-- Shows what the new ACL would look like
-- Logs old and new ACL configurations
+1) Read desired ACL from playbooks/cisco_vty_acl.txt
+2) Check if VTY_Access ACL exists on VTY lines
+3) Check if ACL configuration is up to date
+4) If update needed:
+   a. Remove ACL from VTY lines
+   b. Remove old VTY_Access access-list
+   c. Re-apply ACL from playbook and verify
+   d. Re-apply ACL to VTY lines
+   e. Exit config mode
+5) Write memory
+6) Verify ACL was updated correctly
+7) Return status based on verification
 """
 
-import os
+import logging
+import time
 import re
-from typing import List, Tuple, Optional, Dict, Any
 from pathlib import Path
-
+from typing import List, Tuple, Set
+from src.utils.csv_sanitizer import sanitize_error_message
 from nornir.core.task import Task, Result
 from nornir.plugins.tasks.networking import netmiko_send_command, netmiko_send_config
+from netmiko.ssh_exception import NetmikoAuthenticationException, NetmikoTimeoutException
 
+# Initialize logger
+logger = logging.getLogger(__name__)
 
-# ======================== Platform Detection ========================
+# ACL name - can be changed if needed
+ACL_NAME = "VTY_Access"
+
+# --------------------------- Platform helpers ---------------------------
 
 def _is_cisco(platform):
-    """Check if platform is Cisco IOS/IOS-XE/NX-OS."""
     p = (platform or "").lower()
-    return p in ("cisco_ios", "ios", "ios-xe", "iosxe", "cisco_nxos", "nxos")
+    return p in ("cisco_ios", "ios", "ios-xe", "iosxe", "cisco_nxos", "nxos", "cisco_ios_telnet")
 
 
-# ======================== ACL Entry Management ========================
-
-def read_acl_entries_from_file(filepath="input/acl_entries.txt"):
+def _load_playbook(playbook_path: str = "playbooks/cisco_vty_acl.txt") -> List[str]:
     """
-    Read new ACL entries from input file.
-    
-    Args:
-        filepath: Path to input file containing ACL entries
-        
-    Returns:
-        List of ACL entry strings (one per line)
-        
-    Raises:
-        FileNotFoundError: If input file doesn't exist
+    Load and parse the playbook file.
+    Returns a list of ACL configuration lines.
+
+    Expected format:
+    ip access-list extended VTY_Access
+     permit tcp host 10.1.1.1 any eq 22
+     permit tcp host 10.1.1.2 any eq 22
+     deny ip any any log
     """
+    acl_lines = []
+
+    project_root = Path(__file__).resolve().parents[2]
+    full_path = project_root / playbook_path
+
+    if not full_path.exists():
+        logger.warning(f"Playbook file not found: {full_path}")
+        return acl_lines
+
     try:
-        with open(filepath, 'r') as f:
-            entries = [line.strip() for line in f if line.strip() and not line.strip().startswith('#')]
-        return entries
-    except FileNotFoundError:
-        raise FileNotFoundError("Input file '{}' not found. Please create it with ACL entries.".format(filepath))
+        with open(full_path, 'r') as f:
+            for line in f:
+                line = line.rstrip()  # Remove trailing whitespace but keep leading spaces
+                # Skip comments and empty lines
+                if not line or line.strip().startswith('#'):
+                    continue
+                acl_lines.append(line)
+
+        logger.info(f"Loaded playbook: {len(acl_lines)} ACL line(s)")
+    except Exception as e:
+        logger.error(f"Failed to load playbook: {str(e)}")
+
+    return acl_lines
 
 
-def prompt_user_for_acl_config():
+def _extract_acl_entries(acl_lines: List[str]) -> List[str]:
     """
-    Prompt user for ACL name and insertion position.
-    
-    Returns:
-        Tuple of (acl_name, position) where position is 1-based index
-    """
-    print("\n" + "="*60)
-    acl_name = input("Enter target ACL name: ").strip()
-    
-    while True:
-        try:
-            position = int(input("Enter position to insert new entries (1=first, 2=second, etc.): ").strip())
-            if position < 1:
-                print("Position must be 1 or greater.")
-                continue
-            break
-        except ValueError:
-            print("Please enter a valid number.")
-    
-    return acl_name, position
-
-
-def parse_acl_from_config(config_output, acl_name):
-    """
-    Parse ACL entries from 'show run' output.
-    
-    Args:
-        config_output: Output from 'show run' command
-        acl_name: Name of the ACL to extract
-        
-    Returns:
-        List of ACL entry lines (permit/deny statements)
+    Extract just the ACL entries (permit/deny lines) from the full ACL config.
+    Strips leading/trailing whitespace for comparison.
     """
     entries = []
-    in_acl = False
-    
-    for line in config_output.splitlines():
-        line = line.strip()
-        
-        # Start of target ACL
-        if line.startswith("ip access-list standard {}".format(acl_name)):
-            in_acl = True
+    for line in acl_lines:
+        stripped = line.strip()
+        # Skip the header line "ip access-list extended VTY_Access"
+        if stripped.startswith("ip access-list"):
             continue
-        
-        # End of ACL section (next ACL or end of config block)
-        if in_acl and (line.startswith("ip access-list") or line.startswith("!") or not line):
-            if line.startswith("!"):
-                break
-            if line.startswith("ip access-list"):
-                break
-        
-        # Collect ACL entries
-        if in_acl and (line.startswith("permit") or line.startswith("deny") or line.startswith("remark")):
-            entries.append(" " + line)  # Preserve indentation
-    
+        if stripped:
+            entries.append(stripped)
     return entries
 
 
-def insert_entries_at_position(existing_entries, new_entries, position):
+def _parse_current_acl(output: str) -> List[str]:
     """
-    Insert new entries at specified position in existing ACL.
-    
-    Args:
-        existing_entries: List of existing ACL entries
-        new_entries: List of new entries to insert
-        position: 1-based position (1=first, 2=second, etc.)
-        
-    Returns:
-        List of combined ACL entries
+    Parse 'show access-lists VTY_Access' output to extract ACL entries.
+    Returns list of normalized entries (without sequence numbers).
+
+    Example output:
+    Extended IP access list VTY_Access
+        10 permit tcp host 10.1.1.1 any eq 22
+        20 permit tcp host 10.1.1.2 any eq 22
+        30 deny ip any any log
     """
-    # Convert to 0-based index
-    insert_idx = position - 1
-    
-    # Ensure position is valid
-    insert_idx = max(0, min(insert_idx, len(existing_entries)))
-    
-    return existing_entries[:insert_idx] + new_entries + existing_entries[insert_idx:]
+    entries = []
+    for line in output.splitlines():
+        line = line.strip()
+        # Skip header and empty lines
+        if not line or line.startswith("Extended") or line.startswith("Standard"):
+            continue
+
+        # Remove sequence number (leading digits)
+        # Format: "10 permit tcp host 10.1.1.1 any eq 22"
+        match = re.match(r'^\d+\s+(.+)$', line)
+        if match:
+            entries.append(match.group(1).strip())
+
+    return entries
 
 
-def check_entries_already_exist(existing_entries, new_entries):
+def _get_vty_lines_with_acl(output: str, acl_name: str) -> List[str]:
     """
-    Check if any new entries already exist in ACL.
-    
-    Args:
-        existing_entries: List of existing ACL entries
-        new_entries: List of new entries to check
-        
-    Returns:
-        Tuple of (bool, list) - (all_exist, duplicate_entries)
+    Parse 'show run | section line vty' output to find which VTY lines have the ACL applied.
+    Returns list of VTY line ranges (e.g., ["0 4", "5 15"]).
     """
-    # Normalize entries for comparison (strip whitespace and sequence numbers)
-    def normalize(entry):
-        # Remove leading numbers and whitespace
-        normalized = re.sub(r'^\s*\d+\s*', '', entry).strip()
-        return normalized
-    
-    existing_normalized = [normalize(e) for e in existing_entries]
-    duplicates = []
-    
-    for new_entry in new_entries:
-        normalized_new = normalize(new_entry)
-        if normalized_new in existing_normalized:
-            duplicates.append(new_entry)
-    
-    return len(duplicates) == len(new_entries), duplicates
+    vty_lines = []
+    current_vty = None
+
+    for line in output.splitlines():
+        line = line.strip()
+
+        # Detect VTY line definition
+        vty_match = re.match(r'^line vty (\d+)(?: (\d+))?', line)
+        if vty_match:
+            start = vty_match.group(1)
+            end = vty_match.group(2) or start
+            current_vty = f"{start} {end}"
+            continue
+
+        # Check if this VTY has the ACL
+        if current_vty and f"access-class {acl_name}" in line:
+            if current_vty not in vty_lines:
+                vty_lines.append(current_vty)
+
+    return vty_lines
 
 
-# ======================== VTY Line Verification ========================
-
-def get_vty_acl_config(task, vty_range):
+def _extract_text(nr_result):
     """
-    Get ACL configuration for specified vty line range.
-    
-    Args:
-        task: Nornir task object
-        vty_range: String like "0 4" or "5 15"
-        
-    Returns:
-        String containing vty configuration output
+    Nornir may give a MultiResult; Netmiko returns a Result.
+    Return plain text either way.
     """
-    cmd = "show run | section line vty {}".format(vty_range)
-    result = task.run(task=netmiko_send_command, command_string=cmd, name="Check vty {}".format(vty_range))
-    return result.result.strip()
+    out = getattr(nr_result, "result", None)
+    if isinstance(out, str):
+        return out
+    try:
+        return nr_result[0].result
+    except Exception:
+        return ""
 
 
-def extract_acl_from_vty(vty_output):
-    """
-    Extract ACL name from vty configuration.
-    
-    Args:
-        vty_output: Output from 'show run | section line vty'
-        
-    Returns:
-        ACL name or None if not found
-    """
-    for line in vty_output.splitlines():
-        if "access-class" in line and "in" in line:
-            # Format: " access-class ACL_NAME in"
-            match = re.search(r'access-class\s+(\S+)\s+in', line)
-            if match:
-                return match.group(1)
-    return None
+# ------------------------------- Action --------------------------------
 
-
-def verify_acl_on_vty_lines(task, acl_name):
-    """
-    Verify ACL is applied to both vty 0 4 and vty 5 15.
-    
-    Args:
-        task: Nornir task object
-        acl_name: Name of ACL to verify
-        
-    Returns:
-        Tuple of (success: bool, message: str, vty_04_acl: str, vty_515_acl: str)
-    """
-    vty_04_output = get_vty_acl_config(task, "0 4")
-    vty_515_output = get_vty_acl_config(task, "5 15")
-    
-    vty_04_acl = extract_acl_from_vty(vty_04_output)
-    vty_515_acl = extract_acl_from_vty(vty_515_output)
-    
-    if vty_04_acl != acl_name and vty_515_acl != acl_name:
-        return False, "ACL '{}' not found on vty 0 4 (found: {}) or vty 5 15 (found: {})".format(
-            acl_name, vty_04_acl or "None", vty_515_acl or "None"), vty_04_acl, vty_515_acl
-    elif vty_04_acl != acl_name:
-        return False, "ACL '{}' not found on vty 0 4 (found: {})".format(acl_name, vty_04_acl or "None"), vty_04_acl, vty_515_acl
-    elif vty_515_acl != acl_name:
-        return False, "ACL '{}' not found on vty 5 15 (found: {})".format(acl_name, vty_515_acl or "None"), vty_04_acl, vty_515_acl
-    
-    return True, "ACL verified on both vty lines", vty_04_acl, vty_515_acl
-
-
-# ======================== ACL Update Operations ========================
-
-def remove_acl_from_vty(task, vty_range, acl_name):
-    """
-    Remove ACL from specified vty line range.
-    
-    Args:
-        task: Nornir task object
-        vty_range: String like "0 4" or "5 15"
-        acl_name: Name of ACL to remove
-    """
-    commands = [
-        "line vty {}".format(vty_range),
-        "no access-class {} in".format(acl_name)
-    ]
-    task.run(task=netmiko_send_config, config_commands=commands, name="Remove ACL from vty {}".format(vty_range))
-
-
-def apply_acl_to_vty(task, vty_range, acl_name):
-    """
-    Apply ACL to specified vty line range.
-    
-    Args:
-        task: Nornir task object
-        vty_range: String like "0 4" or "5 15"
-        acl_name: Name of ACL to apply
-    """
-    commands = [
-        "line vty {}".format(vty_range),
-        "access-class {} in".format(acl_name)
-    ]
-    task.run(task=netmiko_send_config, config_commands=commands, name="Apply ACL to vty {}".format(vty_range))
-
-
-def update_acl(task, acl_name, new_acl_entries):
-    """
-    Update ACL by removing and re-creating with new entries.
-    
-    Args:
-        task: Nornir task object
-        acl_name: Name of ACL to update
-        new_acl_entries: List of complete ACL entries (with proper indentation)
-    """
-    # Remove old ACL
-    remove_cmd = ["no ip access-list standard {}".format(acl_name)]
-    task.run(task=netmiko_send_config, config_commands=remove_cmd, name="Remove old ACL")
-    
-    # Create new ACL with entries
-    create_commands = ["ip access-list standard {}".format(acl_name)] + new_acl_entries
-    task.run(task=netmiko_send_config, config_commands=create_commands, name="Create updated ACL")
-
-
-def verify_acl_update(task, acl_name, expected_entries):
-    """
-    Verify ACL was updated correctly.
-    
-    Args:
-        task: Nornir task object
-        acl_name: Name of ACL to verify
-        expected_entries: List of expected ACL entries
-        
-    Returns:
-        Tuple of (success: bool, message: str)
-    """
-    # Get current ACL
-    result = task.run(task=netmiko_send_command, command_string="show run | section ip access-list standard {}".format(acl_name))
-    current_entries = parse_acl_from_config(result.result, acl_name)
-    
-    # Normalize for comparison
-    def normalize(entry):
-        return re.sub(r'^\s*\d+\s*', '', entry).strip()
-    
-    current_normalized = [normalize(e) for e in current_entries]
-    expected_normalized = [normalize(e) for e in expected_entries]
-    
-    if current_normalized == expected_normalized:
-        return True, "ACL updated successfully"
-    else:
-        return False, "ACL verification failed - entries don't match expected configuration"
-
-
-# ======================== Main Action Entry Point ========================
-
-# Module-level variables to store user input (shared across all device tasks)
-_ACL_NAME = None
-_POSITION = None
-_NEW_ENTRIES = None
-_DRY_RUN = False
-
-
-def run(task, pm, dry_run=False):
+def run(task: Task, pm=None) -> Result:
     """
     Entry point required by app_main.py.
-    Updates Cisco standard ACL with new entries from input file.
-    
-    Args:
-        task: Nornir task object
-        pm: Progress manager for UI updates
-        dry_run: If True, perform pre-checks only without making changes
-        
-    Returns:
-        Result object with dict containing: device, ip, platform, model, status, info
-        
-    This section is for reporting and requires to send back a dictionary. The following format must be returned:
-
-    Example:
-    rows = [
-        {"device": "edge1", "ip": "192.0.2.11", "platform": "cisco_ios", "model": "ISR4431", "status": "Success", "info": "ACL has been updated"},
-        {"device": "jnp-qfx1", "ip": "192.0.2.21", "platform": "juniper_junos", "model": "QFX5120", "status": "Failed", "info": "Not a Cisco device"},
-    ]
+    Updates Cisco VTY ACL and returns a row dict in Result.result.
     """
-    global _ACL_NAME, _POSITION, _NEW_ENTRIES, _DRY_RUN
-    
     host = task.host.name
     platform = task.host.platform
     ip = task.host.hostname
-    
-    # Store dry_run flag
-    _DRY_RUN = dry_run
-    
-    # Initialize result row
+
+    # Initialize status variables
+    status = "FAIL"
+    info_text = ""
+
+    # Only run on Cisco devices
+    if not _is_cisco(platform):
+        logger.info(f"[{host}] Skipping - not a Cisco device (platform: {platform})")
+        return Result(
+            host=task.host,
+            changed=False,
+            result={
+                "device": host,
+                "ip": ip,
+                "platform": platform,
+                "model": task.host.get("model", "N/A"),
+                "status": "SKIP",
+                "info": "Not a Cisco device - skipped",
+            }
+        )
+
+    # Log connection details
+    conn_opts = task.host.connection_options.get("netmiko")
+    if conn_opts:
+        device_type = conn_opts.extras.get("device_type", "unknown")
+        port = conn_opts.port or "default"
+        has_secret = "secret" in conn_opts.extras
+        logger.info(f"[{host}] Starting VTY ACL update for {ip} "
+                   f"(platform: {platform}, device_type: {device_type}, port: {port}, "
+                   f"enable_secret_configured: {has_secret})")
+    else:
+        logger.info(f"[{host}] Starting VTY ACL update for {ip} (platform: {platform})")
+
+    try:
+        # Load playbook configuration
+        logger.info(f"[{host}] Loading playbook configuration...")
+        playbook_acl = _load_playbook()
+
+        if not playbook_acl:
+            logger.warning(f"[{host}] No ACL configuration found in playbook")
+            status = "FAIL"
+            info_text = "No ACL configuration defined in playbook"
+            raise Exception("Empty playbook configuration")
+
+        # Extract desired ACL entries from playbook
+        desired_entries = _extract_acl_entries(playbook_acl)
+        logger.info(f"[{host}] Desired ACL has {len(desired_entries)} entries")
+
+        # Explicitly enter enable mode for Cisco devices
+        enable_secret = task.host.data.get("enable_secret")
+        if enable_secret:
+            logger.info(f"[{host}] Entering enable mode...")
+            enable_success = False
+
+            for attempt in range(2):  # Try twice
+                try:
+                    # Get the netmiko connection and enter enable mode
+                    conn = task.host.get_connection("netmiko", task.nornir.config)
+                    if not conn.check_enable_mode():
+                        conn.enable()
+                        logger.info(f"[{host}] Successfully entered enable mode (attempt {attempt + 1})")
+                    else:
+                        logger.info(f"[{host}] Already in enable mode (attempt {attempt + 1})")
+                    enable_success = True
+                    break  # Success, exit retry loop
+
+                except Exception as e:
+                    if attempt == 0:  # First attempt failed
+                        logger.warning(f"[{host}] Enable mode attempt 1 failed: {str(e)}")
+                        logger.info(f"[{host}] Waiting 15 seconds before retry...")
+                        time.sleep(15)
+                    else:  # Second attempt failed
+                        # Enable mode failure is FATAL for Cisco
+                        error_msg = f"Enable mode failed after 2 attempts: {str(e)}"
+                        logger.error(f"[{host}] {error_msg}")
+                        status = "FAIL"
+                        info_text = f"Enable mode failed - check enable password. Error: {str(e)}"
+                        raise Exception(error_msg)
+
+            if not enable_success:
+                raise Exception("Enable mode failed after retry")
+
+        # Step 1: Check current ACL configuration
+        logger.info(f"[{host}] Checking current ACL '{ACL_NAME}'...")
+        r1 = task.run(
+            task=netmiko_send_command,
+            command_string=f"show access-lists {ACL_NAME}",
+            name=f"Show ACL {ACL_NAME}",
+            delay_factor=3,
+            max_loops=500
+        )
+        current_acl_output = (_extract_text(r1) or "").strip()
+        logger.info(f"[{host}] Current ACL output:\n{current_acl_output}")
+
+        # Check if ACL exists
+        acl_exists = ACL_NAME in current_acl_output or "access list" in current_acl_output.lower()
+
+        if acl_exists:
+            current_entries = _parse_current_acl(current_acl_output)
+            logger.info(f"[{host}] Current ACL has {len(current_entries)} entries")
+        else:
+            current_entries = []
+            logger.info(f"[{host}] ACL '{ACL_NAME}' does not exist on device")
+
+        # Step 2: Check VTY lines configuration
+        logger.info(f"[{host}] Checking VTY lines configuration...")
+        r2 = task.run(
+            task=netmiko_send_command,
+            command_string="show run | section line vty",
+            name="Show VTY lines",
+            delay_factor=3,
+            max_loops=500
+        )
+        vty_output = (_extract_text(r2) or "").strip()
+        logger.info(f"[{host}] VTY configuration:\n{vty_output}")
+
+        vty_lines_with_acl = _get_vty_lines_with_acl(vty_output, ACL_NAME)
+        logger.info(f"[{host}] VTY lines with ACL '{ACL_NAME}': {vty_lines_with_acl}")
+
+        # Step 3: Determine if update is needed
+        # Compare current entries with desired entries
+        current_set = set(current_entries)
+        desired_set = set(desired_entries)
+
+        acl_matches = (current_set == desired_set)
+        vty_configured = len(vty_lines_with_acl) > 0
+
+        logger.info(f"[{host}] Verification - ACL matches: {acl_matches}, VTY configured: {vty_configured}")
+
+        if acl_matches and vty_configured:
+            logger.info(f"[{host}] VTY ACL is already up to date")
+            status = "OK"
+            info_text = "VTY ACL is already up to date"
+        else:
+            # Step 4: Apply configuration changes
+            logger.info(f"[{host}] Applying VTY ACL configuration changes...")
+
+            # Step 4a: Remove ACL from VTY lines (if it exists)
+            if vty_lines_with_acl:
+                logger.info(f"[{host}] Removing ACL from VTY lines: {vty_lines_with_acl}")
+                for vty_line in vty_lines_with_acl:
+                    remove_cmds = [
+                        f"line vty {vty_line}",
+                        f"no access-class {ACL_NAME} in"
+                    ]
+                    logger.debug(f"[{host}] Removing ACL from VTY {vty_line}")
+                    task.run(
+                        task=netmiko_send_config,
+                        config_commands=remove_cmds,
+                        name=f"Remove ACL from VTY {vty_line}",
+                    )
+
+            # Step 4b: Remove old ACL (if it exists)
+            if acl_exists:
+                logger.info(f"[{host}] Removing old ACL '{ACL_NAME}'...")
+                task.run(
+                    task=netmiko_send_config,
+                    config_commands=[f"no ip access-list extended {ACL_NAME}"],
+                    name=f"Remove old ACL {ACL_NAME}",
+                )
+
+            # Step 4c: Re-apply ACL from playbook
+            logger.info(f"[{host}] Applying new ACL from playbook...")
+            logger.debug(f"[{host}] ACL commands:\n" + "\n".join(playbook_acl))
+
+            task.run(
+                task=netmiko_send_config,
+                config_commands=playbook_acl,
+                name=f"Apply ACL {ACL_NAME}",
+            )
+
+            # Verify ACL was created correctly (using 'do' command in config mode)
+            logger.info(f"[{host}] Verifying ACL configuration...")
+            r3 = task.run(
+                task=netmiko_send_command,
+                command_string=f"do show access-lists {ACL_NAME}",
+                name=f"Verify ACL {ACL_NAME}",
+                delay_factor=3,
+                max_loops=500
+            )
+            verify_acl_output = (_extract_text(r3) or "").strip()
+            logger.info(f"[{host}] Verification ACL output:\n{verify_acl_output}")
+
+            verify_entries = _parse_current_acl(verify_acl_output)
+            verify_acl_matches = (set(verify_entries) == desired_set)
+
+            if not verify_acl_matches:
+                logger.error(f"[{host}] ACL verification failed after applying configuration")
+                status = "FAIL"
+                info_text = "ACL verification failed after applying configuration"
+                raise Exception("ACL verification failed")
+
+            logger.info(f"[{host}] ACL verified successfully")
+
+            # Step 4d: Re-apply ACL to VTY lines
+            # Apply to standard VTY line ranges: 0 4 and 5 15
+            vty_ranges = ["0 4", "5 15"]
+            logger.info(f"[{host}] Applying ACL to VTY lines: {vty_ranges}")
+
+            for vty_range in vty_ranges:
+                apply_cmds = [
+                    f"line vty {vty_range}",
+                    f"access-class {ACL_NAME} in"
+                ]
+                logger.debug(f"[{host}] Applying ACL to VTY {vty_range}")
+                task.run(
+                    task=netmiko_send_config,
+                    config_commands=apply_cmds,
+                    name=f"Apply ACL to VTY {vty_range}",
+                )
+
+            # Step 4e: Exit config mode
+            logger.info(f"[{host}] Exiting configuration mode...")
+            task.run(
+                task=netmiko_send_config,
+                config_commands=["end"],
+                name="Exit config mode",
+            )
+
+            # Step 5: Save configuration
+            logger.info(f"[{host}] Saving configuration...")
+            r4 = task.run(
+                task=netmiko_send_command,
+                command_string="write memory",
+                name="Save configuration",
+                delay_factor=3,
+                max_loops=500
+            )
+            save_output = (_extract_text(r4) or "").strip()
+            logger.info(f"[{host}] Save output: {save_output}")
+
+            # Step 6: Final verification
+            logger.info(f"[{host}] Performing final verification...")
+
+            # Re-check ACL
+            r5 = task.run(
+                task=netmiko_send_command,
+                command_string=f"show access-lists {ACL_NAME}",
+                name=f"Final verify ACL {ACL_NAME}",
+                delay_factor=3,
+                max_loops=500
+            )
+            final_acl_output = (_extract_text(r5) or "").strip()
+            final_entries = _parse_current_acl(final_acl_output)
+            final_acl_matches = (set(final_entries) == desired_set)
+
+            # Re-check VTY lines
+            r6 = task.run(
+                task=netmiko_send_command,
+                command_string="show run | section line vty",
+                name="Final verify VTY lines",
+                delay_factor=3,
+                max_loops=500
+            )
+            final_vty_output = (_extract_text(r6) or "").strip()
+            final_vty_lines = _get_vty_lines_with_acl(final_vty_output, ACL_NAME)
+            final_vty_configured = len(final_vty_lines) > 0
+
+            logger.info(f"[{host}] Final verification - ACL matches: {final_acl_matches}, "
+                       f"VTY configured: {final_vty_configured}, VTY lines: {final_vty_lines}")
+
+            if final_acl_matches and final_vty_configured:
+                logger.info(f"[{host}] Final verification successful - all configuration matches")
+                status = "OK"
+                info_text = "Update was successful"
+            else:
+                logger.warning(f"[{host}] Final verification failed - config does not match playbook")
+                status = "FAIL"
+                info_text = "Update was unsuccessful, please check device"
+
+    except NetmikoAuthenticationException as e:
+        logger.error(f"[{host}] Authentication failed: {str(e)}")
+        status = "FAIL"
+        info_text = "Authentication failed - check credentials"
+
+    except NetmikoTimeoutException as e:
+        logger.error(f"[{host}] Connection timeout: {str(e)}")
+        status = "FAIL"
+        info_text = "Connection timeout - device unreachable"
+
+    except Exception as e:
+        logger.error(f"[{host}] Unexpected error: {str(e)}", exc_info=True)
+        status = "FAIL"
+        info_text = f"Update was unsuccessful - {sanitize_error_message(e)}"
+
+    finally:
+        # Always close the connection to prevent hung sessions
+        try:
+            logger.debug(f"[{host}] Closing netmiko connection...")
+            task.host.close_connection("netmiko")
+            logger.debug(f"[{host}] Connection closed successfully")
+        except Exception as e:
+            logger.warning(f"[{host}] Error closing connection: {str(e)}")
+
+    # Build result row
     row = {
         "device": host,
         "ip": ip,
         "platform": platform,
         "model": task.host.get("model", "N/A"),
-        "status": "Failed",
-        "info": ""
+        "status": status,
+        "info": info_text,
     }
-    
-    # Progress update    
-    # ---- Pre-flight checks ----
-    
-    # 1. Verify this is a Cisco device
-    if not _is_cisco(platform):
-        row["info"] = "Skipped - Not a Cisco device"                pm.update(host=host, description="Skipped (non-Cisco)")
-            except Exception:
-                pass
-        return Result(host=task.host, changed=False, result=row)
-    
-    # 2. Read input file and prompt user (only once for first device)
-    if _NEW_ENTRIES is None:
-        try:
-            _NEW_ENTRIES = read_acl_entries_from_file()
-            
-            # Clear screen and display entries
-            os.system('clear')
-            print("\n" + "="*60)
-            print("NEW ACL ENTRIES TO BE ADDED:")
-            print("="*60)
-            for idx, entry in enumerate(_NEW_ENTRIES, 1):
-                print("{}. {}".format(idx, entry))
-            print("="*60 + "\n")
-            
-            # Prompt for ACL name and position
-            _ACL_NAME, _POSITION = prompt_user_for_acl_config()
-            
-            print("\nTarget ACL: {}".format(_ACL_NAME))
-            print("Insert position: {}".format(_POSITION))
-            print("\nProceeding with {} mode...\n".format("DRY-RUN" if dry_run else "UPDATE"))
-            
-        except FileNotFoundError as e:
-            row["info"] = str(e)
-            if pm:
-                try:
-                    pm.advance(host=host)
-                    pm.update(host=host, description="Failed (no input file)")
-                except Exception:
-                    pass
-            return Result(host=task.host, changed=False, failed=True, result=row)
-    
-    # ---- Connect and execute ----
-    
-    try:
-        # 3. Get current running config for ACL        
-        result = task.run(task=netmiko_send_command, command_string="show run | section ip access-list standard {}".format(_ACL_NAME))
-        config_output = result.result
-        
-        # 4. Verify ACL exists
-        if "ip access-list standard {}".format(_ACL_NAME) not in config_output:
-            row["info"] = "Pre-check Failed" if dry_run else "ACL '{}' not found on device".format(_ACL_NAME)
-            if pm:
-                try:
-                    pm.advance(host=host)
-                    pm.update(host=host, description="Failed (ACL not found)")
-                except Exception:
-                    pass
-            return Result(host=task.host, changed=False, failed=True, result=row)
-        
-        # Parse existing ACL entries
-        existing_entries = parse_acl_from_config(config_output, _ACL_NAME)
-        
-        # 5. Check if entries already exist        
-        all_exist, duplicates = check_entries_already_exist(existing_entries, _NEW_ENTRIES)
-        if all_exist:
-            row["status"] = "Success"
-            row["info"] = "Pre-check Passed" if dry_run else "All entries already exist in ACL - no update needed"
-            if pm:
-                try:
-                    pm.advance(host=host)
-                    pm.update(host=host, description="Completed (no changes needed)")
-                except Exception:
-                    pass
-            return Result(host=task.host, changed=False, result=row)
-        
-        # 6. Verify ACL is on vty lines        
-        vty_ok, vty_msg, vty_04_acl, vty_515_acl = verify_acl_on_vty_lines(task, _ACL_NAME)
-        if not vty_ok:
-            row["info"] = "Pre-check Failed" if dry_run else vty_msg
-            if pm:
-                try:
-                    pm.advance(host=host)
-                    pm.update(host=host, description="Failed (vty check)")
-                except Exception:
-                    pass
-            return Result(host=task.host, changed=False, failed=True, result=row)
-        
-        # Create new ACL configuration
-        new_acl_entries = insert_entries_at_position(existing_entries, _NEW_ENTRIES, _POSITION)
-        
-        # ---- Dry-run mode: log and exit ----
-        if dry_run:
-            if pm:
-                try:
-                    pm.update(host=host, description="Logging dry-run results")
-                except Exception:
-                    pass
-            
-            # Log old and new ACL
-            print("\n" + "="*60)
-            print("DRY-RUN for device: {}".format(host))
-            print("="*60)
-            print("\nOLD ACL ({}):\n".format(_ACL_NAME))
-            print("ip access-list standard {}".format(_ACL_NAME))
-            for entry in existing_entries:
-                print(entry)
-            
-            print("\n" + "-"*60)
-            print("\nNEW ACL ({}) - WOULD BE APPLIED:\n".format(_ACL_NAME))
-            print("ip access-list standard {}".format(_ACL_NAME))
-            for entry in new_acl_entries:
-                print(entry)
-            print("\n" + "="*60 + "\n")
-            
-            row["status"] = "Success"
-            row["info"] = "Pre-check Passed"
-            
-            if pm:
-                try:
-                    pm.advance(host=host)
-                    pm.update(host=host, description="Dry-run complete")
-                except Exception:
-                    pass
-            
-            return Result(host=task.host, changed=False, result=row)
-        
-        # ---- Regular mode: apply changes ----
-        
-        # 7. Remove ACL from vty lines        
-        remove_acl_from_vty(task, "0 4", _ACL_NAME)
-        remove_acl_from_vty(task, "5 15", _ACL_NAME)
-        
-        # 8. Update ACL        
-        update_acl(task, _ACL_NAME, new_acl_entries)
-        
-        # 9. Verify ACL update        
-        verify_ok, verify_msg = verify_acl_update(task, _ACL_NAME, new_acl_entries)
-        if not verify_ok:
-            row["info"] = "ACL didn't update properly"
-            if pm:
-                try:
-                    pm.advance(host=host)
-                    pm.update(host=host, description="Failed (verification)")
-                except Exception:
-                    pass
-            return Result(host=task.host, changed=True, failed=True, result=row)
-        
-        # 10. Re-apply ACL to vty lines        
-        apply_acl_to_vty(task, "0 4", _ACL_NAME)
-        apply_acl_to_vty(task, "5 15", _ACL_NAME)
-        
-        # Success!
-        row["status"] = "Success"
-        row["info"] = "ACL has been updated"
-                
-        return Result(host=task.host, changed=True, result=row)
-        
-    except Exception as e:
-        # Catch authentication/connection errors
-        error_msg = str(e)
-        if "authentication" in error_msg.lower() or "login" in error_msg.lower():
-            row["info"] = "Authentication failed: {}".format(error_msg)
-        else:
-            row["info"] = "Pre-check Failed" if dry_run else "Error: {}".format(error_msg)
-                        pm.update(host=host, description="Failed (error)")
-            except Exception:
-                pass
-        
-        return Result(host=task.host, changed=False, failed=True, result=row)
+
+    return Result(host=task.host, changed=(status == "OK"), result=row)

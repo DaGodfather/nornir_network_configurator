@@ -1,0 +1,21 @@
+# Cisco VTY ACL Playbook Example
+# This file defines the ACL that should be applied to VTY lines for management access
+#
+# Format:
+# - First line must be: ip access-list extended VTY_Access
+# - Following lines are permit/deny statements (one per line)
+# - Lines starting with # are comments and will be ignored
+#
+# To use this file in production:
+# 1. Copy this file to cisco_vty_acl.txt
+# 2. Update the permit statements with your management IPs
+# 3. Run the script with -update_cisco_vty_acl
+
+ip access-list extended VTY_Access
+ permit tcp host 10.1.1.1 any eq 22
+ permit tcp host 10.1.1.1 any eq telnet
+ permit tcp host 10.1.1.2 any eq 22
+ permit tcp host 10.1.1.2 any eq telnet
+ permit tcp 10.2.0.0 0.0.255.255 any eq 22
+ permit tcp 10.2.0.0 0.0.255.255 any eq telnet
+ deny ip any any log
