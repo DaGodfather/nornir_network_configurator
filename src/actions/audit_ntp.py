@@ -2,24 +2,25 @@
 # Python 3.6+ / Nornir 2.5
 
 """
-Audit NTP configuration/status and return a per-host row for your summary table.
+Audit NTP configuration against playbook/ntp.txt.
 
 This module conforms to app_main.py's expectations:
 - It defines `run(task, pm)` -> Result
 - It returns a Result whose `.result` is a dict with keys:
-    device, ip, platform, model, status("OK"/"FAIL"), info(<captured CLI text>)
+    device, ip, platform, model, status("OK"/"FAIL"), info(<details>)
 
 Behavior:
-1) Choose a concise, platform-aware config grep for NTP.
-2) If the grep returns nothing, fall back to an operational command
-   (e.g., 'show ntp associations' / 'show ntp peers') to provide useful context.
-3) Put the captured text into `info`. If still empty, set status=FAIL.
+1) Load expected NTP servers from playbooks/ntp.txt
+2) Query device for configured NTP servers
+3) Compare configured servers against expected servers
+4) Return status and detailed info about compliance
 """
 
 import logging
+import re
 import time
-from src.utils.cisco_commands import *
-from src.utils.juniper_commands import *
+from typing import List, Set
+from pathlib import Path
 from src.utils.csv_sanitizer import sanitize_for_csv, sanitize_error_message
 from nornir.core.task import Task, Result
 from nornir.plugins.tasks.networking import netmiko_send_command
@@ -37,39 +38,78 @@ def _is_juniper(platform):
 
 def _is_cisco(platform):
     p = (platform or "").lower()
-    return p in ("cisco_ios", "ios", "ios-xe", "iosxe", "cisco_nxos", "nxos","cisco_ios_telnet")
+    return p in ("cisco_ios", "ios", "ios-xe", "iosxe", "cisco_nxos", "nxos", "cisco_ios_telnet")
 
 
-def _pick_ntp_config_cmd(platform):
+# --------------------------- Playbook loading ---------------------------
+
+def _load_ntp_playbook(playbook_path: str = "playbooks/ntp.txt") -> List[str]:
     """
-    Return a concise config-focused command that lists NTP peers/servers.
+    Load NTP server IPs from playbook file.
+    Returns list of IP addresses (one per line), skipping comments and empty lines.
     """
-    if _is_juniper(platform):
-        # Only NTP stanza, easy to read/log.
-        return "show configuration system ntp | display set"
-    if _is_cisco(platform):
-        # Use 'include' without regex anchors for maximum compatibility
-        # This will match any line containing 'ntp server', 'ntp peer', or 'ntp pool'
-        return "show run | include ntp server"
-    # Fallback: generic Cisco-ish grep
-    return "show run | include ntp"
+    ntp_servers = []
+    try:
+        with open(playbook_path, "r") as f:
+            for line in f:
+                # Skip comments and empty lines
+                if not line or line.strip().startswith('#'):
+                    continue
+                stripped = line.strip()
+                if stripped:
+                    ntp_servers.append(stripped)
+
+        logger.info(f"Loaded playbook: {len(ntp_servers)} NTP server(s)")
+    except FileNotFoundError:
+        logger.warning(f"Playbook file not found: {playbook_path}")
+    except Exception as e:
+        logger.error(f"Failed to load playbook: {str(e)}")
+
+    return ntp_servers
 
 
-def _pick_ntp_operational_fallback(platform):
+# --------------------------- Device parsing ---------------------------
+
+def _parse_cisco_ntp_servers(output: str) -> Set[str]:
     """
-    If config grep turns up empty, try an operational command so we still return
-    something informative (status/associations).
+    Parse Cisco 'show run | include ntp server' output.
+
+    Example output:
+    ntp server 10.1.1.100
+    ntp server 10.1.1.101 prefer
+    ntp server 172.16.0.10
+
+    Returns set of IP addresses.
     """
-    if _is_juniper(platform):
-        # Junos operational NTP
-        return "show ntp associations"
-    if _is_cisco(platform):
-        # IOS/NX-OS—one of these usually works; Netmiko will run the string as-is.
-        # We try 'associations' first; 'peers' is common on NX-OS.
-        # Note: we execute only ONE fallback; pick the most universal for your fleet.
-        return "show ntp associations"
-    # Fallback, try the most common
-    return "show ntp associations"
+    servers = set()
+    for line in output.splitlines():
+        line = line.strip()
+        # Match 'ntp server <IP>' with optional trailing arguments
+        match = re.match(r'^ntp server\s+(\S+)', line, re.IGNORECASE)
+        if match:
+            servers.add(match.group(1))
+    return servers
+
+
+def _parse_juniper_ntp_servers(output: str) -> Set[str]:
+    """
+    Parse Juniper 'show configuration system ntp | display set' output.
+
+    Example output:
+    set system ntp server 10.1.1.100
+    set system ntp server 10.1.1.101 prefer
+    set system ntp server 172.16.0.10
+
+    Returns set of IP addresses.
+    """
+    servers = set()
+    for line in output.splitlines():
+        line = line.strip()
+        # Match 'set system ntp server <IP>' with optional trailing arguments
+        match = re.match(r'^set system ntp server\s+(\S+)', line, re.IGNORECASE)
+        if match:
+            servers.add(match.group(1))
+    return servers
 
 
 def _extract_text(nr_result):
@@ -91,11 +131,13 @@ def _extract_text(nr_result):
 def run(task: Task, pm=None) -> Result:
     """
     Entry point required by app_main.py.
-    Executes an NTP audit and returns a row dict in Result.result.
+    Audits NTP configuration against playbook and returns a row dict in Result.result.
     """
     host = task.host.name
     platform = task.host.platform
     ip = task.host.hostname
+    status = "FAIL"
+    info_text = ""
 
     # Log connection details
     conn_opts = task.host.connection_options.get("netmiko")
@@ -108,7 +150,18 @@ def run(task: Task, pm=None) -> Result:
         logger.info(f"[{host}] Starting NTP audit for {ip} (platform: {platform})")
 
     try:
-        # Explicitly enter enable mode for Cisco devices if enable secret is configured
+        # Step 1: Load expected NTP servers from playbook
+        expected_servers = _load_ntp_playbook()
+        if not expected_servers:
+            logger.warning(f"[{host}] No NTP servers defined in playbook")
+            status = "FAIL"
+            info_text = "No NTP servers defined in playbook - create playbooks/ntp.txt"
+            raise Exception("Playbook empty or missing")
+
+        expected_set = set(expected_servers)
+        logger.info(f"[{host}] Expected NTP servers: {expected_set}")
+
+        # Step 2: Enter enable mode for Cisco devices
         enable_secret = task.host.data.get("enable_secret")
         if _is_cisco(platform) and enable_secret:
             logger.info(f"[{host}] Entering enable mode...")
@@ -116,7 +169,6 @@ def run(task: Task, pm=None) -> Result:
 
             for attempt in range(2):  # Try twice
                 try:
-                    # Get the netmiko connection and enter enable mode
                     conn = task.host.get_connection("netmiko", task.nornir.config)
                     if not conn.check_enable_mode():
                         conn.enable()
@@ -124,61 +176,73 @@ def run(task: Task, pm=None) -> Result:
                     else:
                         logger.info(f"[{host}] Already in enable mode (attempt {attempt + 1})")
                     enable_success = True
-                    break  # Success, exit retry loop
+                    break
 
                 except Exception as e:
                     if attempt == 0:  # First attempt failed
                         logger.warning(f"[{host}] Enable mode attempt 1 failed: {str(e)}")
-                        logger.info(f"[{host}] Waiting 10 seconds before retry...")
+                        logger.info(f"[{host}] Waiting 15 seconds before retry...")
                         time.sleep(15)
                     else:  # Second attempt failed
-                        # Enable mode failure is FATAL for Cisco - we need privileged exec for 'show run'
                         error_msg = f"Enable mode failed after 2 attempts: {str(e)}"
                         logger.error(f"[{host}] {error_msg}")
                         status = "FAIL"
                         info_text = f"Enable mode failed - check enable password. Error: {str(e)}"
-                        raise Exception(error_msg)  # This will jump to the outer except block
+                        raise Exception(error_msg)
 
             if not enable_success:
                 raise Exception("Enable mode failed after retry")
 
-        # 1) Try concise config grep
-        cfg_cmd = _pick_ntp_config_cmd(platform)
-        logger.info(f"[{host}] Sending command: {cfg_cmd}")
+        # Step 3: Query device for NTP configuration
+        if _is_juniper(platform):
+            cmd = "show configuration system ntp | display set"
+        elif _is_cisco(platform):
+            cmd = "show run | include ntp server"
+        else:
+            cmd = "show run | include ntp"
 
-        r1 = task.run(
+        logger.info(f"[{host}] Querying NTP configuration: {cmd}")
+
+        r = task.run(
             task=netmiko_send_command,
-            command_string=cfg_cmd,
-            name="NTP config grep",
-            delay_factor=2,
-            max_loops=500
+            command_string=cmd,
+            name="Query NTP config",
+            delay_factor=3,
+            max_loops=500,
         )
-        logger.info(f"[{host}] output from command: {cfg_cmd}: \n{r1}")
-        text = (_extract_text(r1) or "").strip()
 
-        logger.debug(f"[{host}] Command output ({len(text)} chars):\n{text}")
+        output = (_extract_text(r) or "").strip()
+        logger.info(f"[{host}] NTP config output:\n{output}")
 
-        # 2) If empty, try an operational fallback for visibility
-        if not text:
-            op_cmd = _pick_ntp_operational_fallback(platform)
-            logger.info(f"[{host}] Config grep empty, trying operational command: {op_cmd}")
+        # Step 4: Parse configured servers
+        if _is_juniper(platform):
+            configured_servers = _parse_juniper_ntp_servers(output)
+        elif _is_cisco(platform):
+            configured_servers = _parse_cisco_ntp_servers(output)
+        else:
+            configured_servers = _parse_cisco_ntp_servers(output)  # Default to Cisco parsing
 
-            r2 = task.run(
-                task=netmiko_send_command,
-                command_string=op_cmd,
-                name="NTP operational",
-                delay_factor=2,
-                max_loops=500
-            )
-            text = (_extract_text(r2) or "").strip()
+        logger.info(f"[{host}] Configured NTP servers: {configured_servers}")
 
-            logger.debug(f"[{host}] Operational command output ({len(text)} chars):\n{text}")
+        # Step 5: Compare configured vs expected
+        missing = expected_set - configured_servers
+        extra = configured_servers - expected_set
 
-        # 3) Decide status & build the row
-        status = "OK" if text else "FAIL"
-
-        # Sanitize info_text for CSV compatibility
-        info_text = sanitize_for_csv(text) if text else "No NTP lines returned"
+        if not configured_servers:
+            status = "FAIL"
+            info_text = f"No NTP servers configured. Expected: {', '.join(sorted(expected_set))}"
+        elif missing and not extra:
+            status = "FAIL"
+            info_text = f"Missing NTP servers: {', '.join(sorted(missing))}. Configured: {', '.join(sorted(configured_servers))}"
+        elif extra and not missing:
+            status = "FAIL"
+            info_text = f"Extra NTP servers found: {', '.join(sorted(extra))}. Expected: {', '.join(sorted(expected_set))}"
+        elif missing and extra:
+            status = "FAIL"
+            info_text = f"Mismatch - Missing: {', '.join(sorted(missing))}; Extra: {', '.join(sorted(extra))}"
+        else:
+            status = "OK"
+            info_text = f"All NTP servers configured correctly: {', '.join(sorted(configured_servers))}"
 
         logger.info(f"[{host}] Audit complete - Status: {status}")
 
@@ -194,8 +258,9 @@ def run(task: Task, pm=None) -> Result:
 
     except Exception as e:
         logger.error(f"[{host}] Unexpected error: {str(e)}", exc_info=True)
-        status = "FAIL"
-        info_text = f"Audit failed - {sanitize_error_message(e)}"
+        if not info_text:  # Don't override existing error messages
+            status = "FAIL"
+            info_text = f"Audit failed - {sanitize_error_message(e)}"
 
     finally:
         # Always close the connection to prevent hung sessions
@@ -206,24 +271,17 @@ def run(task: Task, pm=None) -> Result:
         except Exception as e:
             logger.warning(f"[{host}] Error closing connection: {str(e)}")
 
-    """
-    This section is for reporting and requires to send back a dictionary. The following format must be returned
+    # Sanitize info_text for CSV compatibility
+    info_text_sanitized = sanitize_for_csv(info_text, max_length=500)
 
-    Example:
-    rows = [
-    {"device": "edge1", "ip": "192.0.2.11", "platform": "cisco_ios", "model": "ISR4431", "status": "OK", "info": "NTP present"},
-    {"device": "jnp-qfx1", "ip": "192.0.2.21", "platform": "juniper_junos", "model": "QFX5120", "status": "FAIL", "info": "No ntp server"},
-    ]
-    """
-
-    # Build your row
+    # Build the result row
     row = {
         "device": host,
         "ip": ip,
         "platform": platform,
-        "model": task.host.get("model", "N/A"),  # keep if you populate it elsewhere
+        "model": task.host.get("model", "N/A"),
         "status": status,
-        "info": info_text,
+        "info": info_text_sanitized,
     }
 
     return Result(host=task.host, changed=False, result=row)
