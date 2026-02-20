@@ -102,18 +102,18 @@ def _extract_acl_entries(acl_lines: List[str]) -> List[str]:
 def _parse_current_acl(output: str) -> List[str]:
     """
     Parse 'show access-lists VTY_Access' output to extract ACL entries.
-    Returns list of normalized entries (without sequence numbers).
+    Returns list of normalized entries (without sequence numbers or match counters).
 
     Example output with sequence numbers:
     Extended IP access list VTY_Access
         10 permit tcp host 10.1.1.1 any eq 22
-        20 permit tcp host 10.1.1.2 any eq 22
+        20 permit tcp host 10.1.1.2 any eq 22 (8 matches)
         30 deny ip any any log
 
     Example output without sequence numbers (older devices):
     Extended IP access list VTY_Access
      permit tcp host 10.1.1.1 any eq 22
-     permit tcp host 10.1.1.2 any eq 22
+     permit tcp host 10.1.1.2 any eq 22 (15 matches)
      deny ip any any log
     """
     entries = []
@@ -122,6 +122,10 @@ def _parse_current_acl(output: str) -> List[str]:
         # Skip header and empty lines
         if not line or line.startswith("Extended") or line.startswith("Standard"):
             continue
+
+        # Remove match counter if present (e.g., " (8 matches)")
+        # This appears at the end of ACL entries on some devices
+        line = re.sub(r'\s*\(\d+\s+matches?\)\s*$', '', line, flags=re.IGNORECASE)
 
         # Try to remove sequence number (leading digits) if present
         # Format: "10 permit tcp host 10.1.1.1 any eq 22"
