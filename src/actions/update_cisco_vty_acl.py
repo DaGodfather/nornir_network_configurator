@@ -83,10 +83,22 @@ def _load_playbook(playbook_path: str = "playbooks/cisco_vty_acl.txt") -> List[s
     return acl_lines
 
 
+def _normalize_acl_entry(entry: str) -> str:
+    """
+    Normalize an ACL entry by:
+    - Stripping leading/trailing whitespace
+    - Collapsing multiple internal spaces to single space
+    - Converting to lowercase for consistent comparison
+    """
+    # Strip and collapse whitespace
+    normalized = ' '.join(entry.strip().split())
+    return normalized.lower()
+
+
 def _extract_acl_entries(acl_lines: List[str]) -> List[str]:
     """
     Extract just the ACL entries (permit/deny lines) from the full ACL config.
-    Strips leading/trailing whitespace for comparison.
+    Normalizes entries for consistent comparison.
     """
     entries = []
     for line in acl_lines:
@@ -95,7 +107,7 @@ def _extract_acl_entries(acl_lines: List[str]) -> List[str]:
         if stripped.startswith("ip access-list"):
             continue
         if stripped:
-            entries.append(stripped)
+            entries.append(_normalize_acl_entry(stripped))
     return entries
 
 
@@ -131,11 +143,11 @@ def _parse_current_acl(output: str) -> List[str]:
         # Format: "10 permit tcp host 10.1.1.1 any eq 22"
         match = re.match(r'^\d+\s+(.+)$', line)
         if match:
-            # Has sequence number - extract entry without it
-            entries.append(match.group(1).strip())
+            # Has sequence number - extract entry without it and normalize
+            entries.append(_normalize_acl_entry(match.group(1)))
         elif line.startswith(('permit', 'deny', 'remark')):
-            # No sequence number (older device) - use line as-is
-            entries.append(line.strip())
+            # No sequence number (older device) - normalize and use
+            entries.append(_normalize_acl_entry(line))
 
     return entries
 
@@ -334,6 +346,20 @@ def run(task: Task, pm=None) -> Result:
         vty_configured = len(vty_lines_with_acl) > 0
 
         logger.info(f"[{host}] Verification - ACL matches: {acl_matches}, VTY configured: {vty_configured}")
+        logger.info(f"[{host}] Current entries count: {len(current_entries)}, Desired entries count: {len(desired_entries)}")
+
+        # Log detailed comparison if counts match but sets don't
+        if len(current_entries) == len(desired_entries) and not acl_matches:
+            logger.warning(f"[{host}] Entry counts match but sets differ - investigating...")
+            missing = desired_set - current_set
+            extra = current_set - desired_set
+            logger.warning(f"[{host}] Missing from device ({len(missing)}): {missing}")
+            logger.warning(f"[{host}] Extra on device ({len(extra)}): {extra}")
+
+            # Sample first few entries for whitespace debugging
+            if current_entries and desired_entries:
+                logger.debug(f"[{host}] Sample current[0]: repr={repr(current_entries[0])}")
+                logger.debug(f"[{host}] Sample desired[0]: repr={repr(desired_entries[0])}")
 
         if acl_matches and vty_configured:
             logger.info(f"[{host}] VTY ACL is already up to date")
