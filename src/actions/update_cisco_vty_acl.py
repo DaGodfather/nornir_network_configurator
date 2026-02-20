@@ -403,11 +403,11 @@ def run(task: Task, pm=None) -> Result:
                 name=f"Apply ACL {ACL_NAME}",
             )
 
-            # Verify ACL was created correctly (using 'do' command in config mode)
+            # Verify ACL was created correctly
             logger.info(f"[{host}] Verifying ACL configuration...")
             r3 = task.run(
                 task=netmiko_send_command,
-                command_string=f"do show access-lists {ACL_NAME}",
+                command_string=f"show access-lists {ACL_NAME}",
                 name=f"Verify ACL {ACL_NAME}",
                 delay_factor=3,
                 max_loops=500
