@@ -138,25 +138,40 @@ def _parse_current_acl(output: str) -> List[str]:
 
 def _get_vty_lines_with_acl(output: str, acl_name: str) -> List[str]:
     """
-    Parse 'show run | section line vty' output to find which VTY lines have the ACL applied.
+    Parse 'show run' output to find which VTY lines have the ACL applied.
     Returns list of VTY line ranges (e.g., ["0 4", "5 15"]).
+
+    Works by scanning full 'show run' output for 'line vty' blocks and checking
+    for 'access-class' commands within those blocks.
     """
     vty_lines = []
     current_vty = None
+    in_vty_section = False
 
     for line in output.splitlines():
-        line = line.strip()
+        stripped = line.strip()
 
         # Detect VTY line definition
-        vty_match = re.match(r'^line vty (\d+)(?: (\d+))?', line)
+        vty_match = re.match(r'^line vty (\d+)(?: (\d+))?', stripped)
         if vty_match:
             start = vty_match.group(1)
             end = vty_match.group(2) or start
             current_vty = f"{start} {end}"
+            in_vty_section = True
             continue
 
+        # Exit VTY section when we hit another config section or '!' delimiter
+        if in_vty_section and (stripped.startswith('!') or
+                               (stripped and not stripped.startswith(' ') and
+                                not stripped.startswith('access-class') and
+                                not stripped.startswith('exec-timeout') and
+                                not stripped.startswith('logging') and
+                                not stripped.startswith('transport'))):
+            in_vty_section = False
+            current_vty = None
+
         # Check if this VTY has the ACL
-        if current_vty and f"access-class {acl_name}" in line:
+        if in_vty_section and current_vty and f"access-class {acl_name}" in stripped:
             if current_vty not in vty_lines:
                 vty_lines.append(current_vty)
 
@@ -295,8 +310,8 @@ def run(task: Task, pm=None) -> Result:
         logger.info(f"[{host}] Checking VTY lines configuration...")
         r2 = task.run(
             task=netmiko_send_command,
-            command_string="show run | section line vty",
-            name="Show VTY lines",
+            command_string="show run",
+            name="Show running config",
             delay_factor=3,
             max_loops=500
         )
@@ -445,8 +460,8 @@ def run(task: Task, pm=None) -> Result:
             # Re-check VTY lines
             r6 = task.run(
                 task=netmiko_send_command,
-                command_string="show run | section line vty",
-                name="Final verify VTY lines",
+                command_string="show run",
+                name="Final verify running config",
                 delay_factor=3,
                 max_loops=500
             )
