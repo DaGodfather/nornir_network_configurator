@@ -104,11 +104,17 @@ def _parse_current_acl(output: str) -> List[str]:
     Parse 'show access-lists VTY_Access' output to extract ACL entries.
     Returns list of normalized entries (without sequence numbers).
 
-    Example output:
+    Example output with sequence numbers:
     Extended IP access list VTY_Access
         10 permit tcp host 10.1.1.1 any eq 22
         20 permit tcp host 10.1.1.2 any eq 22
         30 deny ip any any log
+
+    Example output without sequence numbers (older devices):
+    Extended IP access list VTY_Access
+     permit tcp host 10.1.1.1 any eq 22
+     permit tcp host 10.1.1.2 any eq 22
+     deny ip any any log
     """
     entries = []
     for line in output.splitlines():
@@ -117,11 +123,15 @@ def _parse_current_acl(output: str) -> List[str]:
         if not line or line.startswith("Extended") or line.startswith("Standard"):
             continue
 
-        # Remove sequence number (leading digits)
+        # Try to remove sequence number (leading digits) if present
         # Format: "10 permit tcp host 10.1.1.1 any eq 22"
         match = re.match(r'^\d+\s+(.+)$', line)
         if match:
+            # Has sequence number - extract entry without it
             entries.append(match.group(1).strip())
+        elif line.startswith(('permit', 'deny', 'remark')):
+            # No sequence number (older device) - use line as-is
+            entries.append(line.strip())
 
     return entries
 
@@ -363,8 +373,17 @@ def run(task: Task, pm=None) -> Result:
             verify_entries = _parse_current_acl(verify_acl_output)
             verify_acl_matches = (set(verify_entries) == desired_set)
 
+            # Log the comparison for debugging
+            logger.info(f"[{host}] Parsed verification entries ({len(verify_entries)}): {verify_entries}")
+            logger.info(f"[{host}] Desired entries ({len(desired_entries)}): {desired_entries}")
+
             if not verify_acl_matches:
+                # Log the differences
+                missing = desired_set - set(verify_entries)
+                extra = set(verify_entries) - desired_set
                 logger.error(f"[{host}] ACL verification failed after applying configuration")
+                logger.error(f"[{host}] Missing entries: {missing}")
+                logger.error(f"[{host}] Extra entries: {extra}")
                 status = "FAIL"
                 info_text = "ACL verification failed after applying configuration"
                 raise Exception("ACL verification failed")
