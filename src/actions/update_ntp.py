@@ -24,6 +24,7 @@ import time
 from typing import List, Set
 from pathlib import Path
 from src.utils.csv_sanitizer import sanitize_for_csv, sanitize_error_message
+from src.utils.enable_mode import enter_enable_mode_robust
 from nornir.core.task import Task, Result
 from nornir.plugins.tasks.networking import netmiko_send_command, netmiko_send_config
 from netmiko.ssh_exception import NetmikoAuthenticationException, NetmikoTimeoutException
@@ -164,36 +165,20 @@ def run(task: Task, pm=None) -> Result:
         logger.info(f"[{host}] Expected NTP servers: {expected_set}")
 
         # Step 2: Enter enable mode for Cisco devices
-        enable_secret = task.host.data.get("enable_secret")
-        if _is_cisco(platform) and enable_secret:
-            logger.info(f"[{host}] Entering enable mode...")
-            enable_success = False
-
-            for attempt in range(2):  # Try twice
-                try:
-                    conn = task.host.get_connection("netmiko", task.nornir.config)
-                    if not conn.check_enable_mode():
-                        conn.enable()
-                        logger.info(f"[{host}] Successfully entered enable mode (attempt {attempt + 1})")
-                    else:
-                        logger.info(f"[{host}] Already in enable mode (attempt {attempt + 1})")
-                    enable_success = True
-                    break
-
-                except Exception as e:
-                    if attempt == 0:  # First attempt failed
-                        logger.warning(f"[{host}] Enable mode attempt 1 failed: {str(e)}")
-                        logger.info(f"[{host}] Waiting 15 seconds before retry...")
-                        time.sleep(15)
-                    else:  # Second attempt failed
-                        error_msg = f"Enable mode failed after 2 attempts: {str(e)}"
-                        logger.error(f"[{host}] {error_msg}")
-                        status = "FAIL"
-                        info_text = f"Enable mode failed - check enable password. Error: {str(e)}"
-                        raise Exception(error_msg)
+        if _is_cisco(platform):
+            enable_success, enable_message = enter_enable_mode_robust(
+                task=task,
+                max_attempts=3,
+                delay_between_attempts=15,
+                force_new_connection=False
+            )
 
             if not enable_success:
-                raise Exception("Enable mode failed after retry")
+                error_msg = f"Enable mode failed: {enable_message}"
+                logger.error(f"[{host}] {error_msg}")
+                status = "FAIL"
+                info_text = f"Enable mode failed - check enable password. {enable_message}"
+                raise Exception(error_msg)
 
         # Step 3: Query current NTP configuration
         if _is_juniper(platform):
