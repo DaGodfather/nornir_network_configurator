@@ -48,24 +48,37 @@ def enter_enable_mode_robust(
 
     for attempt in range(max_attempts):
         try:
-            # Get connection
-            conn = task.host.get_connection("netmiko", task.nornir.config)
-
-            # Strategy 1: Check if already in enable mode
-            if conn.check_enable_mode():
-                logger.info(f"[{host}] Already in enable mode (attempt {attempt + 1})")
-                return True, f"Already in enable mode (attempt {attempt + 1})"
-
-            # Strategy 2: On second attempt, close and reopen connection to clear state
+            # Strategy 2: On second attempt (or first if forced), close and reopen connection to clear state
             if attempt == 1 or (attempt == 0 and force_new_connection):
                 logger.info(f"[{host}] Closing connection to clear state before retry...")
                 try:
                     task.host.close_connection("netmiko")
                     time.sleep(3)  # Brief pause to ensure clean close
-                    conn = task.host.get_connection("netmiko", task.nornir.config)
-                    logger.info(f"[{host}] Connection reopened")
+                    logger.info(f"[{host}] Connection closed, will reopen...")
                 except Exception as e:
-                    logger.warning(f"[{host}] Error reopening connection: {str(e)}")
+                    logger.warning(f"[{host}] Error closing connection: {str(e)}")
+
+            # Get connection (or reconnect if closed)
+            logger.debug(f"[{host}] Getting netmiko connection (attempt {attempt + 1})...")
+            try:
+                conn = task.host.get_connection("netmiko", task.nornir.config)
+                logger.info(f"[{host}] Connection established successfully")
+            except Exception as conn_error:
+                error_msg = f"Failed to establish connection: {str(conn_error)}"
+                logger.error(f"[{host}] {error_msg}")
+                # If we can't connect, try next attempt
+                if attempt < max_attempts - 1:
+                    logger.info(f"[{host}] Waiting {delay_between_attempts} seconds before retry...")
+                    time.sleep(delay_between_attempts)
+                    continue
+                else:
+                    return False, error_msg
+
+            # Strategy 1: Check if already in enable mode
+            logger.debug(f"[{host}] Checking if already in enable mode...")
+            if conn.check_enable_mode():
+                logger.info(f"[{host}] Already in enable mode (attempt {attempt + 1})")
+                return True, f"Already in enable mode (attempt {attempt + 1})"
 
             # Strategy 3: Send newline to clear any partial commands
             if attempt > 0:
