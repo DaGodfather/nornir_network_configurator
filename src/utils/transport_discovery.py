@@ -100,10 +100,14 @@ def apply_conn(host_or_task: Any, device_type: str, port: int) -> None:
     extras = dict(existing_extras)
     extras["device_type"] = device_type
 
-    # Add enable secret if it exists in host data
+    # Add enable secret - always set it (even if empty) to avoid Netmiko warnings
     enable_secret = host.data.get("enable_secret")
     if enable_secret:
         extras["secret"] = enable_secret
+    else:
+        # Set to empty string to prevent Netmiko from complaining
+        # This allows connections without enable mode or where enable password = login password
+        extras["secret"] = ""
 
     # Add Telnet-specific timing parameters for slow/old devices
     if "telnet" in device_type.lower():
