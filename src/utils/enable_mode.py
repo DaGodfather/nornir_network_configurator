@@ -99,6 +99,7 @@ def enter_enable_mode_robust(
                     logger.info(f"[{host}] Trying manual 'enable' command with send_command_timing...")
                     conn = task.host.get_connection("netmiko", task.nornir.config)
 
+                    logger.info(f"[{host}] Connection was made to device successfully")
                     # Send enable command manually
                     output = conn.send_command_timing("enable", delay_factor=4)
                     logger.debug(f"[{host}] Output after 'enable': {output[:100]}")
