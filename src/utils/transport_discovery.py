@@ -23,6 +23,8 @@ What it does:
 Notes:
 - Designed for Cisco IOS/NX-OS (SSH + Telnet). Junos is SSH-only.
 - Extend `platform_to_netmiko_types()` to cover more platforms.
+- Telnet connections use extended timeouts (auth_timeout=60s, banner_timeout=45s,
+  global_delay_factor=4) to handle slow/old devices that may have delayed prompts
 """
 
 import json
@@ -102,6 +104,17 @@ def apply_conn(host_or_task: Any, device_type: str, port: int) -> None:
     enable_secret = host.data.get("enable_secret")
     if enable_secret:
         extras["secret"] = enable_secret
+
+    # Add Telnet-specific timing parameters for slow/old devices
+    if "telnet" in device_type.lower():
+        # Increase timeouts for Telnet connections
+        extras["global_delay_factor"] = 4  # Multiply all delays by 4
+        extras["auth_timeout"] = 60  # Wait up to 60s for username/password prompts
+        extras["banner_timeout"] = 45  # Wait up to 45s for banner/initial output
+        extras["conn_timeout"] = 30  # Connection establishment timeout
+        # Keep fast_cli disabled for Telnet (if not already set)
+        if "fast_cli" not in extras:
+            extras["fast_cli"] = False
 
     host.connection_options["netmiko"] = ConnectionOptions(
         port=port,
