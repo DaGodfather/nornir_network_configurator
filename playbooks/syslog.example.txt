@@ -1,19 +1,20 @@
-# Syslog Configuration Example
-# This file defines the syslog servers and settings that should be configured on network devices
-# Format: One syslog command per line
-# Lines starting with # are comments and will be ignored
+# Syslog Server Playbook Example
+# This file defines the syslog servers that should be configured on devices
+#
+# Format:
+# - One IP address per line
+# - Lines starting with # are comments and will be ignored
+# - Empty lines are ignored
+#
+# To use this file in production:
+# 1. Copy this file to syslog.txt
+# 2. Update with your syslog server IPs
+# 3. Run the update_syslog action
 
-# Syslog servers
-logging host 10.10.10.1
-logging host 10.10.10.2
+# Primary syslog servers
+10.1.1.200
+10.1.1.201
 
-# Syslog settings
-logging trap informational
-logging facility local6
-logging source-interface Loopback0
-
-# Optional: Buffered logging
-# logging buffered 16384 informational
-
-# Optional: Console logging
-# logging console warnings
+# Secondary syslog servers
+172.16.0.20
+172.16.0.21

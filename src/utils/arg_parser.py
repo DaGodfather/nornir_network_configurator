@@ -11,6 +11,7 @@ class CliArgs:
         self.parser.add_argument("-audit_vty_acl", action="store_true", help="Audit VTY ACLs on Cisco devices")
         self.parser.add_argument("-audit_ntp", action="store_true", help="Audit NTP config on devices")
         self.parser.add_argument("-update_ntp", action="store_true", help="Update NTP config on devices")
+        self.parser.add_argument("-update_syslog", action="store_true", help="Update syslog servers on devices")
         self.parser.add_argument("-audit_domain_name", action="store_true", help="Audit domain name config on devices")
         self.parser.add_argument("-update_domain_name", action="store_true", help="Update domain name config on devices")
         self.parser.add_argument("-audit_local_password", action="store_true", help="Audit local password config on devices")

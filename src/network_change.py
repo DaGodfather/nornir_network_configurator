@@ -27,6 +27,7 @@ ACTION_MAP = {
     "audit_vty_acl":             "audit_vty_acl",
     "audit_ntp":             "audit_ntp",
     "update_ntp":            "update_ntp",
+    "update_syslog":         "update_syslog",
     "audit_domain_name":     "audit_domain_name",
     "update_domain_name":    "update_domain_name",
     "audit_local_passowrd":  "audit_local_passowrd",
