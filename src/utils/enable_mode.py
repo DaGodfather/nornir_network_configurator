@@ -100,13 +100,13 @@ def enter_enable_mode_robust(
                     conn = task.host.get_connection("netmiko", task.nornir.config)
 
                     # Send enable command manually
-                    output = conn.send_command_timing("enable", delay_factor=2)
+                    output = conn.send_command_timing("enable", delay_factor=4)
                     logger.debug(f"[{host}] Output after 'enable': {output[:100]}")
 
                     # Check if password prompt appeared
                     if "assword" in output.lower():
                         logger.debug(f"[{host}] Sending enable password...")
-                        output = conn.send_command_timing(enable_secret, delay_factor=2)
+                        output = conn.send_command_timing(enable_secret, delay_factor=4)
                         logger.debug(f"[{host}] Output after password: {output[:100]}")
 
                     # Verify with check_enable_mode
