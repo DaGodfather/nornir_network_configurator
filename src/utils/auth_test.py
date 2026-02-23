@@ -14,6 +14,7 @@ from nornir.plugins.tasks.networking import netmiko_send_command
 from src.utils.transport_discovery import (
     apply_conn, load_cache, save_cache, platform_to_netmiko_types, is_port_open
 )
+from src.utils.enable_mode import enter_enable_mode_robust
 
 logger = logging.getLogger(__name__)
 
@@ -46,24 +47,25 @@ def test_single_device(task: Task) -> Result:
             logger.info(f"[{host}] Connection: device_type={device_type}, port={port}")
 
         # Try to get connection and enter enable mode for Cisco
-        enable_secret = task.host.data.get("enable_secret")
-        if _is_cisco(platform) and enable_secret:
+        if _is_cisco(platform):
             logger.info(f"[{host}] Testing enable mode...")
-            try:
-                conn = task.host.get_connection("netmiko", task.nornir.config)
-                if not conn.check_enable_mode():
-                    conn.enable()
-                    logger.info(f"[{host}] Successfully entered enable mode")
-                else:
-                    logger.info(f"[{host}] Already in enable mode")
-            except Exception as e:
-                error_msg = f"Enable mode failed: {str(e)}"
+            enable_success, enable_message = enter_enable_mode_robust(
+                task=task,
+                max_attempts=3,
+                delay_between_attempts=15,
+                force_new_connection=False
+            )
+
+            if not enable_success:
+                error_msg = f"Enable mode failed: {enable_message}"
                 logger.error(f"[{host}] {error_msg}")
                 return Result(
                     host=task.host,
                     failed=True,
                     result={"success": False, "error": error_msg}
                 )
+
+            logger.info(f"[{host}] Enable mode test successful: {enable_message}")
 
         # Send a simple test command
         test_cmd = "show version | include Version" if _is_cisco(platform) else "show version"
