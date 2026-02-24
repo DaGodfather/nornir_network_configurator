@@ -144,7 +144,9 @@ def main_task(task: Task, action: Callable[[Task, object], Result], pm=None) -> 
             except Exception:
                 pass
 
-        return Result(host=task.host, failed=True, result=row)
+        # Use failed=False so Nornir stores result as a normal dict (not exception wrapper)
+        # Status "FAIL" in the row dict communicates the failure to the output table/CSV
+        return Result(host=task.host, failed=False, result=row)
 
     result = action(task, pm)
 

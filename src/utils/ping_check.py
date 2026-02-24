@@ -74,18 +74,18 @@ def is_reachable(host: str, port: int = None, timeout: float = 3.0) -> bool:
         True if device appears reachable, False otherwise.
     """
     if port:
-        result = _tcp_probe(host, port, timeout)
-        logger.debug(f"[{host}] TCP probe port {port}: {'reachable' if result else 'unreachable'}")
-        if result:
+        if _tcp_probe(host, port, timeout):
             return True
+        logger.warning(f"[{host}] TCP probe port {port}: unreachable, trying ICMP...")
     else:
         # Try SSH then Telnet
         for p in (22, 23):
             if _tcp_probe(host, p, timeout):
-                logger.debug(f"[{host}] TCP probe port {p}: reachable")
                 return True
+        logger.warning(f"[{host}] TCP probe ports 22/23: unreachable, trying ICMP...")
 
     # TCP failed - try ICMP as last resort
     result = _icmp_ping(host, timeout=int(timeout))
-    logger.debug(f"[{host}] ICMP ping fallback: {'reachable' if result else 'unreachable'}")
+    if not result:
+        logger.warning(f"[{host}] ICMP ping also failed - device appears offline")
     return result
