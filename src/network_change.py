@@ -92,8 +92,15 @@ def save_results_to_csv(rows, action_name, output_dir="output"):
         for row in rows:
             all_keys.update(row.keys())
 
-        # Sort keys for consistent column order
-        fieldnames = sorted(all_keys)
+        # Fixed column order with 'info' always last
+        preferred_order = ["device", "ip", "platform", "model", "status"]
+        fieldnames = [col for col in preferred_order if col in all_keys]
+        # Append any remaining columns (excluding 'info') in sorted order
+        remaining = sorted(all_keys - set(preferred_order) - {"info"})
+        fieldnames.extend(remaining)
+        # Always put 'info' last
+        if "info" in all_keys:
+            fieldnames.append("info")
 
         # Write to CSV
         with open(csv_filename, 'w', newline='') as csvfile:
