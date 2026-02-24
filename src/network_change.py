@@ -1,6 +1,7 @@
 # src/app_main.py
 # Python 3.6+ / Nornir 2.5
 import importlib
+import logging
 import os
 import csv
 import time
@@ -8,6 +9,8 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Callable, Tuple
 from getpass import getpass, getuser
+
+logger = logging.getLogger(__name__)
 
 from nornir import InitNornir
 from nornir.core.task import Task, Result
@@ -19,6 +22,7 @@ from .utils.rich_progress import get_progress_manager
 from .utils.transport_discovery import bootstrap_transport
 from .utils.auth_test import test_authentication
 from .utils.device_filter import apply_device_filter
+from .utils.ping_check import is_reachable
 
 
 # Map CLI flags -> module name inside src/actions/
@@ -106,6 +110,35 @@ def save_results_to_csv(rows, action_name, output_dir="output"):
 
 def main_task(task: Task, action: Callable[[Task, object], Result], pm=None) -> Result:
     """Nornir task wrapper that passes progress manager to the action for real-time updates."""
+    host = task.host.name
+    ip = task.host.hostname
+
+    # Determine port from discovered connection options (22=SSH, 23=Telnet)
+    conn_opts = task.host.connection_options.get("netmiko")
+    port = int(conn_opts.port) if conn_opts and conn_opts.port else None
+
+    # Ping/reachability check before attempting login
+    if not is_reachable(ip, port=port):
+        logger.warning(f"[{host}] Device unreachable at {ip} (port {port}) - skipping")
+
+        row = {
+            "device": host,
+            "ip": ip,
+            "platform": task.host.platform or "",
+            "model": (task.host.data or {}).get("model", "N/A"),
+            "status": "FAIL",
+            "info": "Device is unreachable, maybe offline",
+        }
+
+        # Advance progress so the bar still moves
+        if pm is not None:
+            try:
+                pm.advance(host="Overall Progress")
+            except Exception:
+                pass
+
+        return Result(host=task.host, failed=True, result=row)
+
     result = action(task, pm)
 
     # Update progress after task completes
