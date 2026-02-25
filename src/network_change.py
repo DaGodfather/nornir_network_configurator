@@ -118,14 +118,22 @@ def save_results_to_csv(rows, action_name, output_dir="output"):
 def main_task(task: Task, action: Callable[[Task, object], Result], pm=None) -> Result:
     """Nornir task wrapper that passes progress manager to the action for real-time updates."""
     host = task.host.name
-    ip = task.host.hostname
+    ip = task.host.hostname or ""
 
     # Determine port from discovered connection options (22=SSH, 23=Telnet)
     conn_opts = task.host.connection_options.get("netmiko")
     port = int(conn_opts.port) if conn_opts and conn_opts.port else None
 
     # Ping/reachability check before attempting login
-    if not is_reachable(ip, port=port):
+    # Wrap only this call so a probe error is treated as unreachable,
+    # while any other failures fall through to Nornir's default handling.
+    try:
+        reachable = is_reachable(ip, port=port)
+    except Exception as e:
+        logger.warning(f"[{host}] Reachability check error: {str(e)} - treating as unreachable")
+        reachable = False
+
+    if not reachable:
         logger.warning(f"[{host}] Device unreachable at {ip} (port {port}) - skipping")
 
         row = {
@@ -137,15 +145,12 @@ def main_task(task: Task, action: Callable[[Task, object], Result], pm=None) -> 
             "info": "Device is unreachable, maybe offline",
         }
 
-        # Advance progress so the bar still moves
         if pm is not None:
             try:
                 pm.advance(host="Overall Progress")
             except Exception:
                 pass
 
-        # Use failed=False so Nornir stores result as a normal dict (not exception wrapper)
-        # Status "FAIL" in the row dict communicates the failure to the output table/CSV
         return Result(host=task.host, failed=False, result=row)
 
     result = action(task, pm)
@@ -153,7 +158,7 @@ def main_task(task: Task, action: Callable[[Task, object], Result], pm=None) -> 
     # Update progress after task completes
     if pm is not None:
         try:
-            pm.advance(host=f"Overall Progress")
+            pm.advance(host="Overall Progress")
         except Exception:
             pass
 
