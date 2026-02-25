@@ -94,7 +94,7 @@ def _parse_cisco_syslog_servers(output: str) -> Tuple[Set[str], str]:
     logging host 10.1.1.201
     """
     servers = set()
-    format_type = "logging host"  # Default to newer format
+    format_type = None  # None means no existing syslog entries were found
 
     for line in output.splitlines():
         line = line.strip()
@@ -111,8 +111,8 @@ def _parse_cisco_syslog_servers(output: str) -> Tuple[Set[str], str]:
         match = re.match(r'^logging\s+(\d+\.\d+\.\d+\.\d+)', line, re.IGNORECASE)
         if match:
             servers.add(match.group(1))
-            # Only change to "logging" format if we haven't seen "logging host" yet
-            if format_type == "logging host" and len(servers) == 1:
+            # Only set to "logging" if we haven't already seen "logging host"
+            if format_type != "logging host":
                 format_type = "logging"
 
     return servers, format_type
@@ -206,7 +206,12 @@ def run(task: Task, pm=None) -> Result:
         # Step 4: Parse currently configured servers and detect format
         if _is_cisco(platform):
             current_servers, syslog_format = _parse_cisco_syslog_servers(current_output)
-            logger.info(f"[{host}] Detected syslog format: '{syslog_format}'")
+            if syslog_format is None:
+                # No existing syslog entries found - default to "logging" for new entries
+                syslog_format = "logging"
+                logger.info(f"[{host}] No existing syslog entries found, will use '{syslog_format}' format")
+            else:
+                logger.info(f"[{host}] Detected syslog format: '{syslog_format}'")
         else:
             # For Juniper or other platforms (not implemented yet)
             current_servers = set()
