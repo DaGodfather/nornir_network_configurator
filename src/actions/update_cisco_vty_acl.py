@@ -509,7 +509,7 @@ def run(task: Task, pm=None) -> Result:
             elif final_acl_matches and not final_vty_configured:
                 logger.warning(f"[{host}] ACL matches playbook but was not applied to VTY lines")
                 status = "OK"
-                info_text = "VTY ACL updated, No VTY ACL was applied"
+                info_text = "VTY ACL updated, No VTY ACL was applied to VTY lines"
             else:
                 logger.warning(f"[{host}] Final verification failed - config does not match playbook")
                 status = "FAIL"
