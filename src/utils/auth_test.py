@@ -15,6 +15,7 @@ from src.utils.transport_discovery import (
     apply_conn, load_cache, save_cache, platform_to_netmiko_types, is_port_open
 )
 from src.utils.enable_mode import enter_enable_mode_robust
+from src.utils.ping_check import is_reachable
 
 logger = logging.getLogger(__name__)
 
@@ -133,11 +134,12 @@ def test_single_device(task: Task) -> Result:
 def test_authentication(nr: Nornir, max_attempts: int = 3) -> Tuple[bool, str]:
     """
     Test authentication on devices in the inventory.
-    Tries up to max_attempts devices in case first device is down or unreachable.
+    Walks the full device list, skipping unreachable devices, until up to
+    max_attempts reachable devices have been tested.
 
     Args:
         nr: Nornir instance with inventory and credentials
-        max_attempts: Maximum number of devices to try (default: 3)
+        max_attempts: Maximum number of reachable devices to test (default: 3)
 
     Returns:
         Tuple of (success: bool, message: str)
@@ -145,33 +147,47 @@ def test_authentication(nr: Nornir, max_attempts: int = 3) -> Tuple[bool, str]:
     if not nr.inventory.hosts:
         return False, "No hosts found in inventory"
 
-    total_hosts = len(nr.inventory.hosts)
     host_names = list(nr.inventory.hosts.keys())
+    total_hosts = len(host_names)
 
-    # Limit attempts to available hosts
-    attempts = min(max_attempts, total_hosts)
-
-    print(f"\nTesting authentication (will try up to {attempts} device(s))...")
+    print(f"\nTesting authentication (will test up to {max_attempts} reachable device(s) from {total_hosts} in inventory)...")
 
     failed_hosts = []
+    tested_count = 0  # how many reachable devices have been auth-tested
 
-    # Try each host until we get a successful connection
-    for i in range(attempts):
-        host_name = host_names[i]
-        host = nr.inventory.hosts[host_name]
+    for host_name in host_names:
+        if tested_count >= max_attempts:
+            break
 
-        print(f"\nAttempt {i + 1}/{attempts}: {host_name} ({host.hostname})")
+        host_obj = nr.inventory.hosts[host_name]
+        ip = host_obj.hostname or ""
+
+        # --- Ping check first ---
+        conn_opts = host_obj.connection_options.get("netmiko")
+        port = int(conn_opts.port) if conn_opts and conn_opts.port else None
+
+        try:
+            reachable = is_reachable(ip, port=port)
+        except Exception as e:
+            logger.warning(f"[{host_name}] Reachability check error: {str(e)} - skipping")
+            reachable = False
+
+        if not reachable:
+            print(f"  ⏭  Skipping {host_name} ({ip}) - Device is unreachable, maybe offline")
+            logger.warning(f"[{host_name}] Ping check failed - skipping auth test")
+            failed_hosts.append((host_name, "Device is unreachable, maybe offline"))
+            continue
+
+        # --- Device is reachable - run auth test ---
+        tested_count += 1
+        print(f"\nAuth test {tested_count}/{max_attempts}: {host_name} ({ip})")
         print("Please wait...")
 
-        # Filter to only this host
         test_nr = nr.filter(name=host_name)
-
-        # Run the test
         result = test_nr.run(task=test_single_device, name="Authentication Test")
 
-        # Check result
         if host_name in result:
-            host_result = result[host_name][0]  # Get first result
+            host_result = result[host_name][0]
             result_data = host_result.result
 
             if host_result.failed or not result_data.get("success"):
@@ -183,24 +199,19 @@ def test_authentication(nr: Nornir, max_attempts: int = 3) -> Tuple[bool, str]:
                     print(f"   Falling back to Telnet for {host_name}...")
                     logger.warning(f"[{host_name}] SSH banner error detected - attempting Telnet fallback")
 
-                    host_obj = nr.inventory.hosts[host_name]
-                    ip = str(host_obj.hostname)
                     _, telnet_type = platform_to_netmiko_types(host_obj.platform)
 
                     if telnet_type and is_port_open(ip, 23, timeout=2.0):
-                        # Switch to Telnet in-memory
                         apply_conn(host_obj, telnet_type, 23)
                         host_obj["mgmt_transport"] = "telnet"
                         host_obj["device_type"] = telnet_type
                         host_obj["port"] = 23
 
-                        # Update cache so future runs use Telnet for this device
                         cache = load_cache("transport_cache.json")
                         cache[host_name] = {"transport": "telnet", "device_type": telnet_type, "port": 23}
                         save_cache(cache, "transport_cache.json")
                         logger.info(f"[{host_name}] Cache updated to Telnet")
 
-                        # Retry the auth test on the same host with Telnet
                         print(f"   Retrying authentication via Telnet...")
                         retry_nr = nr.filter(name=host_name)
                         retry_result = retry_nr.run(task=test_single_device, name="Authentication Test (Telnet)")
@@ -221,16 +232,10 @@ def test_authentication(nr: Nornir, max_attempts: int = 3) -> Tuple[bool, str]:
 
                 failed_hosts.append((host_name, error))
                 print(f"❌ FAILED on {host_name}: {error}")
-
-                # If this isn't the last attempt, try next host
-                if i < attempts - 1:
-                    print(f"Trying next device...")
-                    continue
+                print(f"Trying next device...")
             else:
-                # Success! Return immediately
                 success_msg = f"Authentication test PASSED on {host_name}"
                 if failed_hosts:
-                    # Mention that previous hosts failed
                     failed_list = ", ".join([f"{h[0]}" for h in failed_hosts])
                     success_msg += f"\n(Previous attempts failed on: {failed_list})"
                 return True, success_msg
@@ -238,12 +243,8 @@ def test_authentication(nr: Nornir, max_attempts: int = 3) -> Tuple[bool, str]:
             error = f"No result returned for {host_name}"
             failed_hosts.append((host_name, error))
             print(f"❌ FAILED on {host_name}: {error}")
+            print(f"Trying next device...")
 
-            # If this isn't the last attempt, try next host
-            if i < attempts - 1:
-                print(f"Trying next device...")
-                continue
-
-    # All attempts failed
+    # All reachable devices tested and failed (or none were reachable)
     failed_summary = "\n".join([f"  - {h[0]}: {h[1]}" for h in failed_hosts])
-    return False, f"Authentication test FAILED on all {attempts} device(s):\n{failed_summary}"
+    return False, f"Authentication test FAILED on all tested device(s):\n{failed_summary}"
