@@ -426,12 +426,31 @@ def run(task: Task, pm=None) -> Result:
                 # Log the differences
                 missing = desired_set - set(verify_entries)
                 extra = set(verify_entries) - desired_set
-                logger.error(f"[{host}] ACL verification failed after applying configuration")
+                logger.error(f"[{host}] ACL not configurable on device - checking VTY line state...")
                 logger.error(f"[{host}] Missing entries: {missing}")
                 logger.error(f"[{host}] Extra entries: {extra}")
-                status = "FAIL"
-                info_text = "ACL verification failed after applying configuration"
-                raise Exception("ACL verification failed")
+
+                # Check whether any access-class is still applied to VTY lines
+                r_vty_check = task.run(
+                    task=netmiko_send_command,
+                    command_string="show run",
+                    name="Check VTY lines after ACL failure",
+                    delay_factor=3,
+                    max_loops=500,
+                )
+                vty_check_output = (_extract_text(r_vty_check) or "").strip()
+                current_vty_with_acl = _get_vty_lines_with_acl(vty_check_output, ACL_NAME)
+
+                if not current_vty_with_acl:
+                    logger.warning(f"[{host}] ACL not configurable and no access-class on VTY lines")
+                    status = "OK"
+                    info_text = "Extended access-list not configurable. No access-class on VTY lines."
+                else:
+                    logger.error(f"[{host}] ACL not configurable but access-class still on VTY lines: {current_vty_with_acl}")
+                    status = "FAIL"
+                    info_text = "Extended access-list not configurable. Access-class found on VTY lines. Check logs."
+
+                raise Exception("ACL not configurable - skip remaining steps")
 
             logger.info(f"[{host}] ACL verified successfully")
 
@@ -527,8 +546,9 @@ def run(task: Task, pm=None) -> Result:
 
     except Exception as e:
         logger.error(f"[{host}] Unexpected error: {str(e)}", exc_info=True)
-        status = "FAIL"
-        info_text = f"Update was unsuccessful - {sanitize_error_message(e)}"
+        if not info_text:  # Don't override status/info already set before raising
+            status = "FAIL"
+            info_text = f"Update was unsuccessful - {sanitize_error_message(e)}"
 
     finally:
         # Always close the connection to prevent hung sessions
