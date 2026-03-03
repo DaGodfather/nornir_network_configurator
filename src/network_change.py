@@ -39,6 +39,7 @@ ACTION_MAP = {
     "update_tacacs":         "update_tacacs",
     "update_cisco_vty_acl":   "update_cisco_vty_acl",
     "update_cisco_local_credentials": "update_cisco_local_credentials",
+    "remove_cisco_aaa":      "remove_cisco_aaa",
     "from_text_file":        "from_text_file",
     "test":                  "test",
 

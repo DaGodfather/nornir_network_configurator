@@ -7,19 +7,19 @@ class CliArgs:
 
     def __init__(self):
         self.parser = argparse.ArgumentParser(description="Brightspeed Managment Network Change script.")
-        self.parser.add_argument("-update_vty_acl", action="store_true", help="Update VTY ACLs on Cisco devices")
         self.parser.add_argument("-audit_vty_acl", action="store_true", help="Audit VTY ACLs on Cisco devices")
         self.parser.add_argument("-audit_ntp", action="store_true", help="Audit NTP config on devices")
         self.parser.add_argument("-update_ntp", action="store_true", help="Update NTP config on devices")
-        self.parser.add_argument("-update_syslog", action="store_true", help="Update syslog servers on devices")
         self.parser.add_argument("-audit_domain_name", action="store_true", help="Audit domain name config on devices")
         self.parser.add_argument("-update_domain_name", action="store_true", help="Update domain name config on devices")
         self.parser.add_argument("-audit_local_password", action="store_true", help="Audit local password config on devices")
         self.parser.add_argument("-update_local_password", action="store_true", help="Update local password new standard config")
         self.parser.add_argument("-update_tacacs", action="store_true", help="Update TACACS to new standard config")
-        self.parser.add_argument("-from_text_file", action="store_true", help="audit TACACS to new standard config")
+        self.parser.add_argument("-from_text_file", action="store_true", help="update  using commands from text file")
         self.parser.add_argument("-update_cisco_vty_acl", action="store_true", help="Update Cisco ACL using 'input/acl_entries.txt' file")
         self.parser.add_argument("-update_cisco_local_credentials", action="store_true", help="Update Cisco local credentials using 'playbooks/cisco_local_credentials.txt' file")
+        self.parser.add_argument("-remove_cisco_aaa", action="store_true", help="Remove AAA/TACACS config from Cisco devices using 'playbooks/cisco_local_credentials.txt' to verify enable secret")
+        self.parser.add_argument("-update_syslog", action="store_true", help="Update syslog server config on devices using 'playbooks/syslog.txt'")
         self.parser.add_argument("-dry_run", action="store_true", help="Used for dry, no all actions support this") #This is not in the CLI mapping
         self.parser.add_argument("-test", action="store_true", help="Test action items will be called.")
 
