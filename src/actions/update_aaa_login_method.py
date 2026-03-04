@@ -20,7 +20,11 @@ Steps performed on each device:
    - If test PASSES: Proceed with cleanup
 7. Remove all TACACS server commands found in show run
 8. Remove password 7 from VTY lines 0 4 and 5 15
-9. Save configuration
+9. Verify TACACS is fully removed by opening a third session with local credentials
+   and running 'show run'. Fail if output contains TACACS session error messages.
+   - If verify FAILS: Revert ALL changes (AAA + TACACS + VTY password 7)
+   - If verify PASSES: Save configuration
+10. Save configuration
 """
 
 import logging
@@ -270,6 +274,92 @@ def _test_local_login(
         return False, f"Local authentication test failed - {str(e)}"
 
 
+# TACACS error strings that indicate the session is still TACACS-controlled
+_TACACS_ERROR_PATTERNS = [
+    "TACACS+ session has expired",
+    "Please re-login to continue",
+    "% TACACS+ session",
+    "TACACS+ server timeout",
+    "Authorization failed",
+]
+
+
+def _test_local_show_run(
+    host_name: str,
+    ip: str,
+    port: int,
+    device_type: str,
+    username: str,
+    local_password: str,
+    enable_secret: str,
+) -> Tuple[bool, str]:
+    """
+    Open a new Netmiko session with local credentials and run 'show run'.
+    Checks that the output is valid config and does NOT contain TACACS error
+    messages (e.g. 'TACACS+ session has expired. Please re-login to continue.').
+
+    Returns (success: bool, message: str).
+    """
+    conn_params = {
+        "device_type": device_type,
+        "host": ip,
+        "username": username,
+        "password": local_password,
+        "secret": enable_secret,
+        "port": port,
+        "timeout": 60,
+        "conn_timeout": 30,
+    }
+
+    if "telnet" in device_type.lower():
+        conn_params["global_delay_factor"] = 4
+        conn_params["auth_timeout"] = 60
+        conn_params["banner_timeout"] = 45
+        conn_params["fast_cli"] = False
+
+    try:
+        logger.info(f"[{host_name}] Opening verification session (local auth) to {ip}:{port}")
+        net_connect = ConnectHandler(**conn_params)
+        net_connect.enable()
+
+        output = net_connect.send_command(
+            "show run",
+            delay_factor=3,
+            max_loops=500,
+        )
+        net_connect.disconnect()
+
+        logger.debug(f"[{host_name}] Verification show run output ({len(output)} chars)")
+
+        # Check for any known TACACS error patterns
+        for pattern in _TACACS_ERROR_PATTERNS:
+            if pattern.lower() in output.lower():
+                logger.error(
+                    f"[{host_name}] TACACS error detected in show run output: '{pattern}'"
+                )
+                return False, f"TACACS still active - '{pattern}' found in output"
+
+        # Sanity check: output should contain real config content
+        if not output or len(output.strip()) < 50:
+            logger.error(f"[{host_name}] show run returned empty/unexpected output")
+            return False, "show run returned empty or unexpected output - verify manually"
+
+        logger.info(f"[{host_name}] Verification show run successful - no TACACS errors")
+        return True, "Local session show run successful - TACACS not interfering"
+
+    except NetmikoAuthenticationException as e:
+        logger.error(f"[{host_name}] Verification session auth failed: {str(e)}")
+        return False, "Verification session failed - credentials rejected"
+
+    except NetmikoTimeoutException as e:
+        logger.error(f"[{host_name}] Verification session timed out: {str(e)}")
+        return False, "Verification session failed - connection timed out"
+
+    except Exception as e:
+        logger.error(f"[{host_name}] Verification session error: {str(e)}")
+        return False, f"Verification session failed - {str(e)}"
+
+
 # ------------------------------- Action --------------------------------
 
 def run(task: Task, pm=None) -> Result:
@@ -477,7 +567,61 @@ def run(task: Task, pm=None) -> Result:
         else:
             logger.info(f"[{host}] No TACACS or VTY password 7 entries found - nothing to clean up")
 
-        # Step 10: Save configuration
+        # Step 10: Verify TACACS fully removed by running show run via a new local session
+        logger.info(f"[{host}] Opening verification session to confirm TACACS is not interfering...")
+        verify_success, verify_message = _test_local_show_run(
+            host_name=host,
+            ip=ip,
+            port=port,
+            device_type=device_type,
+            username=username,
+            local_password=local_test_password,
+            enable_secret=enable_secret,
+        )
+
+        if not verify_success:
+            # Full revert: restore AAA, TACACS, and VTY password 7 on the primary session
+            logger.warning(f"[{host}] Verification failed - reverting all config changes...")
+
+            revert_all = []
+
+            # Restore original AAA authentication commands
+            if original_aaa_commands:
+                revert_all.extend(original_aaa_commands)
+            else:
+                revert_all.extend([f"no {cmd}" for cmd in aaa_commands])
+
+            # Re-add removed TACACS commands
+            if tacacs_commands:
+                revert_all.extend(tacacs_commands)
+
+            # Re-add removed VTY password 7 entries
+            if vty_password7_entries:
+                for vty_range, pw_cmd in vty_password7_entries:
+                    revert_all.append(f"line vty {vty_range}")
+                    revert_all.append(pw_cmd)
+
+            logger.debug(f"[{host}] Full revert commands:\n" + "\n".join(revert_all))
+
+            try:
+                task.run(
+                    task=netmiko_send_config,
+                    config_commands=revert_all,
+                    name="Full revert - all changes",
+                )
+                logger.info(f"[{host}] All changes reverted successfully")
+                revert_info = "All config changes reverted"
+            except Exception as revert_err:
+                logger.error(f"[{host}] Full revert failed: {str(revert_err)}")
+                revert_info = "WARNING: Full revert may have failed - check device manually"
+
+            status = "FAIL"
+            info_text = f"Post-cleanup verification failed - {verify_message}; {revert_info}"
+            raise Exception("TACACS verification failed - all changes reverted")
+
+        logger.info(f"[{host}] Verification passed - TACACS confirmed removed, proceeding to save")
+
+        # Step 11: Save configuration
         logger.info(f"[{host}] Saving configuration...")
         r2 = task.run(
             task=netmiko_send_command,

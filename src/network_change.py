@@ -251,7 +251,11 @@ def main() -> None:
         print("     - PASS: Proceed with cleanup")
         print("  5. Remove all TACACS server commands from device")
         print("  6. Remove password 7 from VTY lines 0 4 and 5 15")
-        print("  7. Save configuration (write memory)")
+        print("  7. Open a THIRD session - run 'show run' to verify TACACS")
+        print("     is fully removed (no 'TACACS+ session has expired' errors)")
+        print("     - FAIL: Revert ALL changes (AAA + TACACS + VTY password 7)")
+        print("     - PASS: Save configuration")
+        print("  8. Save configuration (write memory)")
         print("  NOTE: Juniper devices are skipped automatically")
         print("=" * 60 + "\n")
 
