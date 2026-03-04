@@ -237,6 +237,12 @@ def _test_local_login(
     # if enable_secret is not set to prevent Netmiko's empty-secret error.
     effective_secret = enable_secret if enable_secret else local_password
 
+    logger.debug(
+        f"[{host_name}] _test_local_login params: device_type={device_type} port={port} "
+        f"username={username!r} local_password_set={bool(local_password)} "
+        f"enable_secret_set={bool(enable_secret)} effective_secret_set={bool(effective_secret)}"
+    )
+
     conn_params = {
         "device_type": device_type,
         "host": ip,
@@ -258,24 +264,26 @@ def _test_local_login(
     try:
         logger.info(f"[{host_name}] Opening test session (local auth) to {ip}:{port}")
         net_connect = ConnectHandler(**conn_params)
+        logger.debug(f"[{host_name}] Test session connected - attempting enable()")
 
         # Attempt to enter enable mode to fully verify credentials
         net_connect.enable()
+        logger.debug(f"[{host_name}] Test session enable() succeeded")
 
         net_connect.disconnect()
         logger.info(f"[{host_name}] Test session successful - local authentication works")
         return True, "Local authentication test passed"
 
     except NetmikoAuthenticationException as e:
-        logger.error(f"[{host_name}] Test session auth failed: {str(e)}")
+        logger.error(f"[{host_name}] Test session auth failed: {str(e)}", exc_info=True)
         return False, "Local authentication test failed - credentials rejected"
 
     except NetmikoTimeoutException as e:
-        logger.error(f"[{host_name}] Test session timed out: {str(e)}")
+        logger.error(f"[{host_name}] Test session timed out: {str(e)}", exc_info=True)
         return False, "Local authentication test failed - connection timed out"
 
     except Exception as e:
-        logger.error(f"[{host_name}] Test session error: {str(e)}")
+        logger.error(f"[{host_name}] Test session error: {str(e)}", exc_info=True)
         return False, f"Local authentication test failed - {str(e)}"
 
 
@@ -310,6 +318,12 @@ def _test_local_show_run(
     # and enable password are the same credential.
     effective_secret = enable_secret if enable_secret else local_password
 
+    logger.debug(
+        f"[{host_name}] _test_local_show_run params: device_type={device_type} port={port} "
+        f"username={username!r} local_password_set={bool(local_password)} "
+        f"enable_secret_set={bool(enable_secret)} effective_secret_set={bool(effective_secret)}"
+    )
+
     conn_params = {
         "device_type": device_type,
         "host": ip,
@@ -330,7 +344,10 @@ def _test_local_show_run(
     try:
         logger.info(f"[{host_name}] Opening verification session (local auth) to {ip}:{port}")
         net_connect = ConnectHandler(**conn_params)
+        logger.debug(f"[{host_name}] Verification session connected - attempting enable()")
+
         net_connect.enable()
+        logger.debug(f"[{host_name}] Verification session enable() succeeded - running show run")
 
         output = net_connect.send_command(
             "show run",
@@ -358,15 +375,15 @@ def _test_local_show_run(
         return True, "Local session show run successful - TACACS not interfering"
 
     except NetmikoAuthenticationException as e:
-        logger.error(f"[{host_name}] Verification session auth failed: {str(e)}")
+        logger.error(f"[{host_name}] Verification session auth failed: {str(e)}", exc_info=True)
         return False, "Verification session failed - credentials rejected"
 
     except NetmikoTimeoutException as e:
-        logger.error(f"[{host_name}] Verification session timed out: {str(e)}")
+        logger.error(f"[{host_name}] Verification session timed out: {str(e)}", exc_info=True)
         return False, "Verification session failed - connection timed out"
 
     except Exception as e:
-        logger.error(f"[{host_name}] Verification session error: {str(e)}")
+        logger.error(f"[{host_name}] Verification session error: {str(e)}", exc_info=True)
         return False, f"Verification session failed - {str(e)}"
 
 
