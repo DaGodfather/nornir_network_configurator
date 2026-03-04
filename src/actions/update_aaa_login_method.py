@@ -232,12 +232,17 @@ def _test_local_login(
     Uses local_password as the login credential.
     Returns (success: bool, message: str).
     """
+    # With 'aaa authentication enable default enable', the enable password is
+    # the same as the login password. Fall back to local_password as the secret
+    # if enable_secret is not set to prevent Netmiko's empty-secret error.
+    effective_secret = enable_secret if enable_secret else local_password
+
     conn_params = {
         "device_type": device_type,
         "host": ip,
         "username": username,
         "password": local_password,
-        "secret": enable_secret,
+        "secret": effective_secret,
         "port": port,
         "timeout": 30,
         "conn_timeout": 30,
@@ -300,12 +305,17 @@ def _test_local_show_run(
 
     Returns (success: bool, message: str).
     """
+    # Fall back to local_password as the secret if enable_secret is not set,
+    # since with 'aaa authentication enable default enable' the login password
+    # and enable password are the same credential.
+    effective_secret = enable_secret if enable_secret else local_password
+
     conn_params = {
         "device_type": device_type,
         "host": ip,
         "username": username,
         "password": local_password,
-        "secret": enable_secret,
+        "secret": effective_secret,
         "port": port,
         "timeout": 60,
         "conn_timeout": 30,
