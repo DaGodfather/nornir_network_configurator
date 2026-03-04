@@ -510,7 +510,11 @@ def run(task: Task, pm=None) -> Result:
                 )
                 raise Exception(f"Enable mode failed: {enable_message}")
 
-            logger.info(f"[{host}] Enable mode succeeded with local credentials - device may already be updated")
+            # Local credentials worked - device is already updated. Return OK immediately.
+            logger.info(f"[{host}] Local credentials accepted - device is already updated, skipping changes")
+            status = "OK"
+            info_text = "Device is already updated"
+            raise Exception("Device already updated - early exit")
 
         # Step 4: Pull running configuration
         logger.info(f"[{host}] Pulling running configuration...")
