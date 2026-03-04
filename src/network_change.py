@@ -39,7 +39,7 @@ ACTION_MAP = {
     "update_tacacs":         "update_tacacs",
     "update_cisco_vty_acl":   "update_cisco_vty_acl",
     "update_cisco_local_credentials": "update_cisco_local_credentials",
-    "remove_cisco_aaa":      "remove_cisco_aaa",
+    "update_aaa_login_method": "update_aaa_login_method",
     "from_text_file":        "from_text_file",
     "test":                  "test",
 
@@ -211,6 +211,19 @@ def main() -> None:
         print("Error: {}".format(e))
         raise SystemExit(2)
 
+    # ---- Action-specific prompts (before clearing screen) ----
+    if action_name == "update_aaa_login_method":
+        print("\n" + "="*60)
+        print("ACTION: Update AAA Login Method")
+        print("="*60)
+        print("A second test session will be opened to verify local")
+        print("authentication works BEFORE TACACS is removed.")
+        print()
+        local_test_password = getpass(prompt="New local password (used to test AAA login): ")
+        for host in nr.inventory.hosts.values():
+            host.data["local_test_password"] = local_test_password
+        print()
+
     # Clear the screen.
     os.system("clear")
 
@@ -223,6 +236,24 @@ def main() -> None:
     else:
         print(f"Devices: {device_count} device(s) will be processed")
     print("="*60 + "\n")
+
+    # ---- Action step banner ----
+    if action_name == "update_aaa_login_method":
+        print("=" * 60)
+        print("Steps performed on each device:")
+        print("  1. Verify enable secret is configured on device")
+        print("     (from playbooks/cisco_local_credentials.txt)")
+        print("  2. Load new AAA commands")
+        print("     (from playbooks/cisco_aaa_login_method.txt)")
+        print("  3. Apply new AAA authentication login/enable commands")
+        print("  4. Open a SECOND session to test local authentication")
+        print("     - FAIL: Revert AAA config to original")
+        print("     - PASS: Proceed with cleanup")
+        print("  5. Remove all TACACS server commands from device")
+        print("  6. Remove password 7 from VTY lines 0 4 and 5 15")
+        print("  7. Save configuration (write memory)")
+        print("  NOTE: Juniper devices are skipped automatically")
+        print("=" * 60 + "\n")
 
     # if not test, create cache for transport type
     # Pre-stage: apply cached decisions and discover for unknown hosts

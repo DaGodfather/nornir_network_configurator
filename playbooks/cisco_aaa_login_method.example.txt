@@ -1,0 +1,21 @@
+# example.cisco_aaa_login_method.txt
+#
+# AAA login method commands to apply to Cisco devices.
+# Copy this file to: playbooks/cisco_aaa_login_method.txt
+#
+# Each line is sent as a config command (in order).
+# Lines starting with '#' are comments and are ignored.
+#
+# These commands switch authentication to use the local enable password
+# so the device can be accessed without TACACS when it is removed.
+#
+# Usage:
+#   - One command per line
+#   - Commands are applied in order under 'configure terminal'
+#   - Ensure 'enable secret' is already configured on the device
+#     before running this action (it is verified automatically)
+#
+# -----------------------------------------------------------------------
+
+aaa authentication login default enable
+aaa authentication enable default enable
