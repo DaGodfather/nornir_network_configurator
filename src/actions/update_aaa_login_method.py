@@ -232,15 +232,15 @@ def _test_local_login(
     Uses local_password as the login credential.
     Returns (success: bool, message: str).
     """
-    # With 'aaa authentication enable default enable', the enable password is
-    # the same as the login password. Fall back to local_password as the secret
-    # if enable_secret is not set to prevent Netmiko's empty-secret error.
-    effective_secret = enable_secret if enable_secret else local_password
-
+    # With 'aaa authentication login/enable default enable', the device uses the
+    # enable password for BOTH login and enable mode. local_password is the
+    # credential being tested end-to-end, so use it as both 'password' and 'secret'.
+    # Using enable_secret here causes enable() to fail because the two credentials
+    # may differ and the device is now configured to use local_password for enable.
     logger.debug(
         f"[{host_name}] _test_local_login params: device_type={device_type} port={port} "
         f"username={username!r} local_password_set={bool(local_password)} "
-        f"enable_secret_set={bool(enable_secret)} effective_secret_set={bool(effective_secret)}"
+        f"enable_secret_set={bool(enable_secret)}"
     )
 
     conn_params = {
@@ -248,7 +248,7 @@ def _test_local_login(
         "host": ip,
         "username": username,
         "password": local_password,
-        "secret": effective_secret,
+        "secret": local_password,
         "port": port,
         "timeout": 30,
         "conn_timeout": 30,
@@ -313,15 +313,12 @@ def _test_local_show_run(
 
     Returns (success: bool, message: str).
     """
-    # Fall back to local_password as the secret if enable_secret is not set,
-    # since with 'aaa authentication enable default enable' the login password
-    # and enable password are the same credential.
-    effective_secret = enable_secret if enable_secret else local_password
-
+    # With 'aaa authentication login/enable default enable', local_password is used
+    # for both login and enable mode - use it as both 'password' and 'secret'.
     logger.debug(
         f"[{host_name}] _test_local_show_run params: device_type={device_type} port={port} "
         f"username={username!r} local_password_set={bool(local_password)} "
-        f"enable_secret_set={bool(enable_secret)} effective_secret_set={bool(effective_secret)}"
+        f"enable_secret_set={bool(enable_secret)}"
     )
 
     conn_params = {
@@ -329,7 +326,7 @@ def _test_local_show_run(
         "host": ip,
         "username": username,
         "password": local_password,
-        "secret": effective_secret,
+        "secret": local_password,
         "port": port,
         "timeout": 60,
         "conn_timeout": 30,
