@@ -468,6 +468,9 @@ def run(task: Task, pm=None) -> Result:
         logger.info(f"[{host}] AAA commands loaded: {aaa_commands}")
 
         # Step 3: Enter enable mode
+        # First attempt: use the startup credentials (normal TACACS flow).
+        # If that fails the device may already be updated and using local auth -
+        # fall back to local_test_password so re-runs against updated devices work.
         enable_success, enable_message = enter_enable_mode_robust(
             task=task,
             max_attempts=3,
@@ -476,9 +479,38 @@ def run(task: Task, pm=None) -> Result:
         )
 
         if not enable_success:
-            status = "FAIL"
-            info_text = f"Enable mode failed - check enable password. {enable_message}"
-            raise Exception(f"Enable mode failed: {enable_message}")
+            logger.warning(
+                f"[{host}] Enable mode failed with startup credentials - "
+                f"device may already be updated. Trying local credentials..."
+            )
+
+            # Switch the host to use local_test_password for both login and enable,
+            # close the existing connection so Nornir reopens with the new credentials.
+            task.host.password = local_test_password
+            conn_opts_ref = task.host.connection_options.get("netmiko")
+            if conn_opts_ref:
+                conn_opts_ref.extras["secret"] = local_test_password
+
+            try:
+                task.host.close_connection("netmiko")
+            except Exception:
+                pass
+
+            enable_success, enable_message = enter_enable_mode_robust(
+                task=task,
+                max_attempts=2,
+                delay_between_attempts=5,
+                force_new_connection=False
+            )
+
+            if not enable_success:
+                status = "FAIL"
+                info_text = (
+                    f"Enable mode failed with both startup and local credentials. {enable_message}"
+                )
+                raise Exception(f"Enable mode failed: {enable_message}")
+
+            logger.info(f"[{host}] Enable mode succeeded with local credentials - device may already be updated")
 
         # Step 4: Pull running configuration
         logger.info(f"[{host}] Pulling running configuration...")
