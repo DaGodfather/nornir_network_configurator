@@ -487,6 +487,7 @@ def run(task: Task, pm=None) -> Result:
             # Switch the host to use local_test_password for both login and enable,
             # close the existing connection so Nornir reopens with the new credentials.
             task.host.password = local_test_password
+            task.host.data["enable_secret"] = local_test_password
             conn_opts_ref = task.host.connection_options.get("netmiko")
             if conn_opts_ref:
                 conn_opts_ref.extras["secret"] = local_test_password

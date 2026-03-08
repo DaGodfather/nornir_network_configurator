@@ -242,6 +242,7 @@ def test_authentication(nr: Nornir, max_attempts: int = 3) -> Tuple[bool, str]:
                     )
 
                     host_obj.password = local_test_password
+                    host_obj.data["enable_secret"] = local_test_password
                     conn_opts_ref = host_obj.connection_options.get("netmiko")
                     if conn_opts_ref:
                         conn_opts_ref.extras["secret"] = local_test_password
