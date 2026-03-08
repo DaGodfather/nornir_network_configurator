@@ -230,6 +230,46 @@ def test_authentication(nr: Nornir, max_attempts: int = 3) -> Tuple[bool, str]:
                     else:
                         print(f"   Telnet (port 23) is not available on {host_name}.")
 
+                elif host_obj.data.get("local_test_password"):
+                    # Primary credentials failed and a local test password is available
+                    # (e.g. update_aaa_login_method action). Device may already be updated
+                    # and no longer accepting TACACS credentials - try local creds.
+                    local_test_password = host_obj.data["local_test_password"]
+                    print(f"⚠️  Primary auth failed on {host_name} - device may already be updated.")
+                    print(f"   Retrying with local test password...")
+                    logger.warning(
+                        f"[{host_name}] Primary auth failed - retrying with local_test_password"
+                    )
+
+                    host_obj.password = local_test_password
+                    conn_opts_ref = host_obj.connection_options.get("netmiko")
+                    if conn_opts_ref:
+                        conn_opts_ref.extras["secret"] = local_test_password
+                    try:
+                        host_obj.close_connection("netmiko")
+                    except Exception:
+                        pass
+
+                    retry_nr = nr.filter(name=host_name)
+                    retry_result = retry_nr.run(
+                        task=test_single_device, name="Authentication Test (Local Creds)"
+                    )
+                    if host_name in retry_result:
+                        retry_host_result = retry_result[host_name][0]
+                        retry_data = retry_host_result.result
+                        if not retry_host_result.failed and retry_data.get("success"):
+                            success_msg = (
+                                f"Authentication test PASSED on {host_name} "
+                                f"(via local test password - device may already be updated)"
+                            )
+                            if failed_hosts:
+                                failed_list = ", ".join([f"{h[0]}" for h in failed_hosts])
+                                success_msg += f"\n(Previous attempts failed on: {failed_list})"
+                            return True, success_msg
+                        else:
+                            error = retry_data.get("error", "Unknown error")
+                            print(f"❌ Local test password fallback also FAILED on {host_name}: {error}")
+
                 failed_hosts.append((host_name, error))
                 print(f"❌ FAILED on {host_name}: {error}")
                 print(f"Trying next device...")
