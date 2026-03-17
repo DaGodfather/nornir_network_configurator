@@ -7,6 +7,8 @@ If SSH fails with a banner/protocol error, clears the cache and retries via Teln
 """
 
 import logging
+import telnetlib
+import time
 from typing import Tuple, Optional
 from nornir.core import Nornir
 from nornir.core.task import Task, Result
@@ -18,6 +20,51 @@ from src.utils.enable_mode import enter_enable_mode_robust
 from src.utils.ping_check import is_reachable
 
 logger = logging.getLogger(__name__)
+
+
+def _test_password_only_telnet(
+    host_name: str, ip: str, port: int, password: str, timeout: int = 20
+) -> Tuple[bool, str]:
+    """
+    Test Telnet login for devices using password-only auth (no Username: prompt).
+    Used when 'aaa authentication login default enable' is configured — the device
+    skips the username prompt and expects only the enable password at login.
+
+    Netmiko's cisco_ios_telnet always sends a username before waiting for prompts,
+    which confuses the device and causes 'telnet connection closed'. This function
+    uses raw telnetlib so we can respond only when the Password: prompt appears.
+    """
+    try:
+        tn = telnetlib.Telnet(ip, port, timeout=timeout)
+
+        # Read past the MOTD/banner and wait for the Password: prompt.
+        idx, _, _ = tn.expect(
+            [b"Password:", b"password:", b"assword "],
+            timeout=timeout,
+        )
+        if idx < 0:
+            tn.close()
+            return False, "No password prompt received within timeout"
+
+        tn.write(password.encode("ascii") + b"\n")
+
+        # Give the device a moment to process and return the exec prompt.
+        time.sleep(3)
+        response = tn.read_very_eager().decode("ascii", errors="ignore")
+        tn.close()
+
+        if ">" in response or "#" in response:
+            logger.info(f"[{host_name}] Password-only telnet login successful")
+            return True, "Password-only telnet login successful"
+        else:
+            logger.warning(
+                f"[{host_name}] Unexpected response after password: {response[:100]!r}"
+            )
+            return False, f"Login failed - no exec prompt in response: {response[:80]!r}"
+
+    except Exception as e:
+        logger.error(f"[{host_name}] Password-only telnet test error: {str(e)}")
+        return False, f"Telnet connection error: {str(e)}"
 
 
 def _is_cisco(platform: Optional[str]) -> bool:
@@ -241,6 +288,9 @@ def test_authentication(nr: Nornir, max_attempts: int = 3) -> Tuple[bool, str]:
                         f"[{host_name}] Primary auth failed - retrying with local_test_password"
                     )
 
+                    # Update ALL credential locations so any subsequent Nornir/enable_mode
+                    # calls use local_test_password (including the manual enable fallback
+                    # in enter_enable_mode_robust which reads host.data["enable_secret"]).
                     host_obj.password = local_test_password
                     host_obj.data["enable_secret"] = local_test_password
                     conn_opts_ref = host_obj.connection_options.get("netmiko")
@@ -251,14 +301,26 @@ def test_authentication(nr: Nornir, max_attempts: int = 3) -> Tuple[bool, str]:
                     except Exception:
                         pass
 
-                    retry_nr = nr.filter(name=host_name)
-                    retry_result = retry_nr.run(
-                        task=test_single_device, name="Authentication Test (Local Creds)"
+                    # Devices configured with 'aaa authentication login default enable'
+                    # show only a Password: prompt over Telnet (no Username: prompt).
+                    # Netmiko always sends a username before waiting for prompts, which
+                    # the device treats as a wrong password and closes the connection.
+                    # Use raw telnetlib so we respond only when Password: appears.
+                    device_type = (
+                        conn_opts_ref.extras.get("device_type", "") if conn_opts_ref else ""
                     )
-                    if host_name in retry_result:
-                        retry_host_result = retry_result[host_name][0]
-                        retry_data = retry_host_result.result
-                        if not retry_host_result.failed and retry_data.get("success"):
+                    telnet_port = (
+                        int(conn_opts_ref.port) if conn_opts_ref and conn_opts_ref.port else 23
+                    )
+
+                    if "telnet" in device_type.lower():
+                        logger.info(
+                            f"[{host_name}] Using password-only telnet test (no username prompt)"
+                        )
+                        retry_ok, retry_msg = _test_password_only_telnet(
+                            host_name, ip, telnet_port, local_test_password
+                        )
+                        if retry_ok:
                             success_msg = (
                                 f"Authentication test PASSED on {host_name} "
                                 f"(via local test password - device may already be updated)"
@@ -268,8 +330,30 @@ def test_authentication(nr: Nornir, max_attempts: int = 3) -> Tuple[bool, str]:
                                 success_msg += f"\n(Previous attempts failed on: {failed_list})"
                             return True, success_msg
                         else:
-                            error = retry_data.get("error", "Unknown error")
+                            error = retry_msg
                             print(f"❌ Local test password fallback also FAILED on {host_name}: {error}")
+                    else:
+                        # SSH devices: Netmiko handles username+password correctly even with
+                        # 'aaa authentication login default enable', so use the normal task.
+                        retry_nr = nr.filter(name=host_name)
+                        retry_result = retry_nr.run(
+                            task=test_single_device, name="Authentication Test (Local Creds)"
+                        )
+                        if host_name in retry_result:
+                            retry_host_result = retry_result[host_name][0]
+                            retry_data = retry_host_result.result
+                            if not retry_host_result.failed and retry_data.get("success"):
+                                success_msg = (
+                                    f"Authentication test PASSED on {host_name} "
+                                    f"(via local test password - device may already be updated)"
+                                )
+                                if failed_hosts:
+                                    failed_list = ", ".join([f"{h[0]}" for h in failed_hosts])
+                                    success_msg += f"\n(Previous attempts failed on: {failed_list})"
+                                return True, success_msg
+                            else:
+                                error = retry_data.get("error", "Unknown error")
+                                print(f"❌ Local test password fallback also FAILED on {host_name}: {error}")
 
                 failed_hosts.append((host_name, error))
                 print(f"❌ FAILED on {host_name}: {error}")
