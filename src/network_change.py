@@ -279,6 +279,13 @@ def main() -> None:
 
         print("✅ Authentication successful! Proceeding with all devices...\n")
 
+        # The auth test may have run failed tasks (e.g. wrong creds on already-updated
+        # devices) which Nornir records in nr.data.failed_hosts.  Since nr.filter() shares
+        # the same GlobalState object, those failures would cause the main nr.run() to
+        # skip those hosts entirely (on_good=True, on_failed=False by default).
+        # Reset failed_hosts now so all inventory hosts are processed by the action.
+        nr.data.failed_hosts.clear()
+
     # Print test banner/message if this is a test run.
     if action_name == "test":
         print("\n\nThis is only a TEST!!\n\n")
