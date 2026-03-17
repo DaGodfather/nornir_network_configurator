@@ -467,7 +467,21 @@ def run(task: Task, pm=None) -> Result:
 
         logger.info(f"[{host}] AAA commands loaded: {aaa_commands}")
 
-        # Step 3: Enter enable mode
+        # Step 3: Early exit if auth test already confirmed local creds work.
+        # Devices with 'aaa authentication login default enable' show only a Password:
+        # prompt over Telnet — Netmiko can't handle that login flow, and the auth test
+        # already verified the device is updated using raw telnetlib.  No point
+        # attempting a Netmiko connection that will always fail.
+        if (task.host.data or {}).get("local_creds_verified"):
+            logger.info(
+                f"[{host}] local_creds_verified flag set by auth test - "
+                f"device is already updated, skipping Netmiko connection"
+            )
+            status = "OK"
+            info_text = "Device is already updated"
+            raise Exception("Device already updated - early exit")
+
+        # Step 4: Enter enable mode
         # First attempt: use the startup credentials (normal TACACS flow).
         # If that fails the device may already be updated and using local auth -
         # fall back to local_test_password so re-runs against updated devices work.
@@ -517,7 +531,7 @@ def run(task: Task, pm=None) -> Result:
             info_text = "Device is already updated"
             raise Exception("Device already updated - early exit")
 
-        # Step 4: Pull running configuration
+        # Step 5: Pull running configuration
         logger.info(f"[{host}] Pulling running configuration...")
         r1 = task.run(
             task=netmiko_send_command,

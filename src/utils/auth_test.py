@@ -321,6 +321,10 @@ def test_authentication(nr: Nornir, max_attempts: int = 3) -> Tuple[bool, str]:
                             host_name, ip, telnet_port, local_test_password
                         )
                         if retry_ok:
+                            # Mark that the action can skip Netmiko connection attempts —
+                            # device is already updated and uses password-only telnet auth
+                            # that Netmiko can't handle.
+                            host_obj.data["local_creds_verified"] = True
                             success_msg = (
                                 f"Authentication test PASSED on {host_name} "
                                 f"(via local test password - device may already be updated)"
@@ -343,6 +347,7 @@ def test_authentication(nr: Nornir, max_attempts: int = 3) -> Tuple[bool, str]:
                             retry_host_result = retry_result[host_name][0]
                             retry_data = retry_host_result.result
                             if not retry_host_result.failed and retry_data.get("success"):
+                                host_obj.data["local_creds_verified"] = True
                                 success_msg = (
                                     f"Authentication test PASSED on {host_name} "
                                     f"(via local test password - device may already be updated)"
