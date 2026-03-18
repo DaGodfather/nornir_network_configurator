@@ -69,6 +69,32 @@ def enter_enable_mode_robust(
             except Exception as conn_error:
                 error_msg = f"Failed to establish connection: {str(conn_error)}"
                 logger.error(f"[{host}] {error_msg}")
+
+                # SSH → Telnet fallback: if SSH connection fails and port 23 is open,
+                # switch transport and retry via Telnet on the next attempt.
+                if not _telnet_switched:
+                    conn_opts_check = task.host.connection_options.get("netmiko")
+                    current_dt = (
+                        conn_opts_check.extras.get("device_type", "") if conn_opts_check else ""
+                    )
+                    if "telnet" not in current_dt.lower():
+                        ip = task.host.hostname or ""
+                        if is_port_open(ip, 23, timeout=2.0):
+                            logger.warning(
+                                f"[{host}] SSH connection failed, port 23 open - switching to "
+                                f"Telnet and updating transport cache"
+                            )
+                            apply_conn(task.host, "cisco_ios_telnet", 23)
+                            cache = load_cache("transport_cache.json")
+                            cache[host] = {
+                                "transport": "telnet",
+                                "device_type": "cisco_ios_telnet",
+                                "port": 23,
+                            }
+                            save_cache(cache, "transport_cache.json")
+                            _telnet_switched = True
+                            logger.info(f"[{host}] transport_cache.json updated to Telnet")
+
                 # If we can't connect, try next attempt
                 if attempt < max_attempts - 1:
                     logger.info(f"[{host}] Waiting {delay_between_attempts} seconds before retry...")
