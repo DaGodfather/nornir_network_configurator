@@ -492,44 +492,54 @@ def run(task: Task, pm=None) -> Result:
             force_new_connection=False
         )
 
+        # After enter_enable_mode_robust, refresh device_type and port — the function
+        # may have internally switched from SSH to Telnet (broken SSH stack fallback).
+        conn_opts_after = task.host.connection_options.get("netmiko")
+        if conn_opts_after:
+            device_type = conn_opts_after.extras.get("device_type", device_type)
+            port = int(conn_opts_after.port) if conn_opts_after.port else port
+
         if not enable_success:
+            # --- Local credentials fallback ---
+            # Startup credentials failed. Device may already be updated and only
+            # accepting local (non-TACACS) credentials.
             logger.warning(
                 f"[{host}] Enable mode failed with startup credentials - "
                 f"device may already be updated. Trying local credentials..."
             )
 
-            # Switch the host to use local_test_password for both login and enable,
-            # close the existing connection so Nornir reopens with the new credentials.
-            task.host.password = local_test_password
-            task.host.data["enable_secret"] = local_test_password
-            conn_opts_ref = task.host.connection_options.get("netmiko")
-            if conn_opts_ref:
-                conn_opts_ref.extras["secret"] = local_test_password
+                # Switch the host to use local_test_password for both login and enable,
+                # close the existing connection so Nornir reopens with the new credentials.
+                task.host.password = local_test_password
+                task.host.data["enable_secret"] = local_test_password
+                conn_opts_ref = task.host.connection_options.get("netmiko")
+                if conn_opts_ref:
+                    conn_opts_ref.extras["secret"] = local_test_password
 
-            try:
-                task.host.close_connection("netmiko")
-            except Exception:
-                pass
+                try:
+                    task.host.close_connection("netmiko")
+                except Exception:
+                    pass
 
-            enable_success, enable_message = enter_enable_mode_robust(
-                task=task,
-                max_attempts=2,
-                delay_between_attempts=5,
-                force_new_connection=False
-            )
-
-            if not enable_success:
-                status = "FAIL"
-                info_text = (
-                    f"Enable mode failed with both startup and local credentials. {enable_message}"
+                enable_success, enable_message = enter_enable_mode_robust(
+                    task=task,
+                    max_attempts=2,
+                    delay_between_attempts=5,
+                    force_new_connection=False
                 )
-                raise Exception(f"Enable mode failed: {enable_message}")
 
-            # Local credentials worked - device is already updated. Return OK immediately.
-            logger.info(f"[{host}] Local credentials accepted - device is already updated, skipping changes")
-            status = "OK"
-            info_text = "Device is already updated"
-            raise Exception("Device already updated - early exit")
+                if not enable_success:
+                    status = "FAIL"
+                    info_text = (
+                        f"Enable mode failed with both startup and local credentials. {enable_message}"
+                    )
+                    raise Exception(f"Enable mode failed: {enable_message}")
+
+                # Local credentials worked - device is already updated. Return OK immediately.
+                logger.info(f"[{host}] Local credentials accepted - device is already updated, skipping changes")
+                status = "OK"
+                info_text = "Device is already updated"
+                raise Exception("Device already updated - early exit")
 
         # Step 5: Pull running configuration
         logger.info(f"[{host}] Pulling running configuration...")

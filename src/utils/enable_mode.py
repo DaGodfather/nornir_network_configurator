@@ -8,6 +8,7 @@ import logging
 import time
 from typing import Tuple, Optional
 from nornir.core.task import Task
+from src.utils.transport_discovery import apply_conn, is_port_open, load_cache, save_cache
 
 logger = logging.getLogger(__name__)
 
@@ -16,7 +17,7 @@ def enter_enable_mode_robust(
     task: Task,
     max_attempts: int = 3,
     delay_between_attempts: int = 15,
-    force_new_connection: bool = False
+    force_new_connection: bool = False,
 ) -> Tuple[bool, str]:
     """
     Robustly enter enable mode on a Cisco device with multiple fallback strategies.
@@ -45,6 +46,8 @@ def enter_enable_mode_robust(
         return True, "No enable_secret configured"
 
     logger.info(f"[{host}] Attempting to enter enable mode (max {max_attempts} attempts)...")
+
+    _telnet_switched = False  # only switch SSH→Telnet once per call
 
     for attempt in range(max_attempts):
         try:
@@ -105,6 +108,31 @@ def enter_enable_mode_robust(
         except Exception as e:
             error_str = str(e)
             logger.warning(f"[{host}] Enable mode attempt {attempt + 1} failed: {error_str}")
+
+            # SSH → Telnet fallback: if SSH fails and port 23 is open, switch transport
+            # and update cache. The next retry attempt will use Telnet automatically.
+            if not _telnet_switched:
+                conn_opts_check = task.host.connection_options.get("netmiko")
+                current_dt = (
+                    conn_opts_check.extras.get("device_type", "") if conn_opts_check else ""
+                )
+                if "telnet" not in current_dt.lower():
+                    ip = task.host.hostname or ""
+                    if is_port_open(ip, 23, timeout=2.0):
+                        logger.warning(
+                            f"[{host}] SSH failed, port 23 open - switching to Telnet "
+                            f"and updating transport cache"
+                        )
+                        apply_conn(task.host, "cisco_ios_telnet", 23)
+                        cache = load_cache("transport_cache.json")
+                        cache[host] = {
+                            "transport": "telnet",
+                            "device_type": "cisco_ios_telnet",
+                            "port": 23,
+                        }
+                        save_cache(cache, "transport_cache.json")
+                        _telnet_switched = True
+                        logger.info(f"[{host}] transport_cache.json updated to Telnet")
 
             # Strategy 5: On last attempt before final, try manual enable command
             if attempt == max_attempts - 2:
