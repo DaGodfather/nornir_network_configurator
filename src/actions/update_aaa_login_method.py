@@ -508,38 +508,38 @@ def run(task: Task, pm=None) -> Result:
                 f"device may already be updated. Trying local credentials..."
             )
 
-                # Switch the host to use local_test_password for both login and enable,
-                # close the existing connection so Nornir reopens with the new credentials.
-                task.host.password = local_test_password
-                task.host.data["enable_secret"] = local_test_password
-                conn_opts_ref = task.host.connection_options.get("netmiko")
-                if conn_opts_ref:
-                    conn_opts_ref.extras["secret"] = local_test_password
+            # Switch the host to use local_test_password for both login and enable,
+            # close the existing connection so Nornir reopens with the new credentials.
+            task.host.password = local_test_password
+            task.host.data["enable_secret"] = local_test_password
+            conn_opts_ref = task.host.connection_options.get("netmiko")
+            if conn_opts_ref:
+                conn_opts_ref.extras["secret"] = local_test_password
 
-                try:
-                    task.host.close_connection("netmiko")
-                except Exception:
-                    pass
+            try:
+                task.host.close_connection("netmiko")
+            except Exception:
+                pass
 
-                enable_success, enable_message = enter_enable_mode_robust(
-                    task=task,
-                    max_attempts=2,
-                    delay_between_attempts=5,
-                    force_new_connection=False
+            enable_success, enable_message = enter_enable_mode_robust(
+                task=task,
+                max_attempts=2,
+                delay_between_attempts=5,
+                force_new_connection=False
+            )
+
+            if not enable_success:
+                status = "FAIL"
+                info_text = (
+                    f"Enable mode failed with both startup and local credentials. {enable_message}"
                 )
+                raise Exception(f"Enable mode failed: {enable_message}")
 
-                if not enable_success:
-                    status = "FAIL"
-                    info_text = (
-                        f"Enable mode failed with both startup and local credentials. {enable_message}"
-                    )
-                    raise Exception(f"Enable mode failed: {enable_message}")
-
-                # Local credentials worked - device is already updated. Return OK immediately.
-                logger.info(f"[{host}] Local credentials accepted - device is already updated, skipping changes")
-                status = "OK"
-                info_text = "Device is already updated"
-                raise Exception("Device already updated - early exit")
+            # Local credentials worked - device is already updated. Return OK immediately.
+            logger.info(f"[{host}] Local credentials accepted - device is already updated, skipping changes")
+            status = "OK"
+            info_text = "Device is already updated"
+            raise Exception("Device already updated - early exit")
 
         # Step 5: Pull running configuration
         logger.info(f"[{host}] Pulling running configuration...")
