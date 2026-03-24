@@ -13,18 +13,21 @@ Steps performed on each device:
 1. Skip non-Juniper devices (return SKIP)
 2. Early exit if auth test already confirmed local creds work (local_creds_verified)
 3. Load expected encrypted passwords from playbooks/juniper_local_credentials.txt
-4. Connect and verify those encrypted passwords exist in device's running config
-   - If missing: FAIL without making any changes
-5. Capture original authentication config for rollback reference
-6. Apply config changes and commit confirmed 10:
+4. Connect and run 'show version' to detect JunOS major version
+5. Determine version-correct hash format (< 15 → $1$, >= 15 → $5$)
+6. Verify that the version-correct hash entries exist in device's running config
+   - If missing or wrong hash format: FAIL without making any changes
+   - This prevents removing TACACS if credentials were not properly updated first
+7. Capture original authentication config for rollback reference
+8. Apply config changes and commit confirmed 10:
      delete system authentication-order
      delete system tacplus-server
      delete system accounting
      commit confirmed 10
-7. Open a SECOND session with local Juniper credentials to verify login works
+9. Open a SECOND session with local Juniper credentials to verify login works
    - PASS: send confirming 'commit' on the original session
    - FAIL: send 'rollback 1' + 'commit' on the original session to revert
-8. Return status
+10. Return status
 
 Fallback behavior:
 - If initial connection with TACACS credentials fails and local Juniper credentials
@@ -55,6 +58,47 @@ logger = logging.getLogger(__name__)
 def _is_juniper(platform):
     p = (platform or "").lower()
     return p in ("juniper", "junos", "juniper_junos")
+
+
+# --------------------------- Version / hash helpers ---------------------------
+
+def _detect_junos_major_version(show_version_output: str) -> Optional[int]:
+    """
+    Extract the JunOS major version number from 'show version' output.
+    Returns the integer major version (e.g. 12, 15) or None if not found.
+    """
+    match = re.search(r'[Jj][Uu][Nn][Oo][Ss][^\d]*(\d+)\.', show_version_output)
+    if match:
+        return int(match.group(1))
+    return None
+
+
+def _hash_prefix_for_version(major_version: int) -> str:
+    """
+    Return the correct encrypted-password hash prefix for the given JunOS major version.
+
+      JunOS < 15  →  $1$  (MD5-crypt)
+      JunOS >= 15 →  $5$  (SHA-256)
+
+    This is authoritative — do not rely on what hash is currently in the device config,
+    as a prior push may have placed the wrong format on the device.
+    """
+    if major_version < 15:
+        return "$1$"
+    return "$5$"
+
+
+def _filter_by_hash_prefix(entries: List[str], hash_prefix: str) -> List[str]:
+    """Return only the entries whose encrypted-password hash starts with hash_prefix."""
+    filtered = []
+    for entry in entries:
+        match = re.search(r'encrypted-password\s+"?(\$\w+\$)', entry)
+        if match:
+            if match.group(1).startswith(hash_prefix):
+                filtered.append(entry)
+        else:
+            filtered.append(entry)
+    return filtered
 
 
 # --------------------------- Playbook loading ---------------------------
@@ -308,22 +352,50 @@ def run(task: Task, pm=None) -> Result:
                 info_text = "Connection failed: " + sanitize_error_message(primary_err)
                 raise Exception(f"Connection failed: {str(primary_err)}")
 
-        # Step 4: Verify expected encrypted passwords are on the device
-        logger.info(f"[{host}] Verifying local credentials exist in device config...")
+        # Step 4: Detect JunOS version — required to select correct hash format
+        logger.info(f"[{host}] Detecting JunOS version...")
+        show_ver = conn.send_command("show version", delay_factor=2)
+        logger.debug(f"[{host}] show version output:\n{show_ver[:300]}")
+
+        major_version = _detect_junos_major_version(show_ver)
+        if major_version is None:
+            status = "FAIL"
+            info_text = "Could not detect JunOS version from 'show version' output"
+            raise Exception("JunOS version detection failed")
+
+        hash_prefix = _hash_prefix_for_version(major_version)
+        hash_label = "$1$ (MD5-crypt)" if hash_prefix == "$1$" else "$5$ (SHA-256)"
+        logger.info(f"[{host}] Detected JunOS {major_version}.x → expecting {hash_label} credentials")
+
+        # Filter playbook entries to those matching the version-correct hash format
+        version_entries = _filter_by_hash_prefix(playbook_entries, hash_prefix)
+        if not version_entries:
+            status = "FAIL"
+            info_text = (
+                f"No playbook entries found for JunOS {major_version}.x ({hash_label}). "
+                f"Add {hash_prefix} hashes to playbooks/juniper_local_credentials.txt"
+            )
+            raise Exception("No matching playbook entries for device version")
+
+        # Step 5: Verify version-correct hashes exist in device config
+        logger.info(f"[{host}] Verifying {hash_label} credentials exist in device config...")
         show_output = conn.send_command(
             "show configuration system | display set",
             delay_factor=2,
         )
         logger.debug(f"[{host}] show configuration system output:\n{show_output[:500]}")
 
-        all_present, missing = _verify_credentials(show_output, playbook_entries)
+        all_present, missing = _verify_credentials(show_output, version_entries)
         if not all_present:
             status = "FAIL"
             missing_short = "; ".join(
                 re.sub(r'encrypted-password\s+"\S+"', 'encrypted-password "<hidden>"', m)
                 for m in missing
             )
-            info_text = f"Local credential verification failed - not found on device: {missing_short}"
+            info_text = (
+                f"Credential verification failed for JunOS {major_version}.x ({hash_label}) — "
+                f"run update_juniper_local_credential first. Missing: {missing_short}"
+            )
             logger.error(f"[{host}] Credential verification failed. Missing:\n" +
                          "\n".join(f"  {m}" for m in missing))
             raise Exception("Credential verification failed - aborting to protect access")
@@ -419,6 +491,8 @@ def run(task: Task, pm=None) -> Result:
                 "Connection failed",
                 "Empty Juniper playbook",
                 "Local auth test failed",
+                "JunOS version detection failed",
+                "No matching playbook entries",
             )
         ):
             logger.error(f"[{host}] Unexpected error: {error_str}", exc_info=True)
