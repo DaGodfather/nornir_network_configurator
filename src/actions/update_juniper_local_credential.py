@@ -11,18 +11,23 @@ This module conforms to app_main.py's expectations:
 - It returns a Result whose `.result` is a dict with keys:
     device, ip, platform, model, status("OK"/"FAIL"/"SKIP"), info(<details>)
 
-JunOS encryption formats:
-  JunOS < 15   → MD5-crypt  ($1$...)  -- older devices (e.g. 12.x, 13.x, 14.x)
-  JunOS >= 15  → SHA-512    ($6$...)  -- modern devices (15.x and later)
+JunOS encryption formats (detected from device config, not version):
+  $1$  MD5-crypt  -- older JunOS (e.g. 12.x, 13.x, 14.x)
+  $5$  SHA-256    -- some JunOS 15.x releases
+  $6$  SHA-512    -- newer JunOS 15.x+
 
 Playbook format (playbooks/juniper_local_credentials.txt):
-  Include BOTH hash versions for each credential. The action detects the device's
-  JunOS version and picks only the entries whose hash prefix ($1$ or $6$) matches.
+  Include entries for all hash versions you need to support. The action reads the
+  device's current config to detect which hash format it uses ($1$, $5$, or $6$),
+  then picks only those entries from the playbook.
 
-  Example (two versions in one file):
-    # SHA-512 for JunOS 15+
+  Example (multiple versions in one file):
+    # SHA-512 for newer JunOS 15+
     set system root-authentication encrypted-password "$6$sha512hash..."
     set system login user netops authentication encrypted-password "$6$sha512hash..."
+    # SHA-256 for some JunOS 15.x
+    set system root-authentication encrypted-password "$5$sha256hash..."
+    set system login user netops authentication encrypted-password "$5$sha256hash..."
     # MD5 for JunOS 12.x / 13.x / 14.x
     set system root-authentication encrypted-password "$1$md5hash..."
     set system login user netops authentication encrypted-password "$1$md5hash..."
@@ -32,20 +37,21 @@ Steps performed on each device:
 2. Early exit if local_creds_verified flag set
 3. Load playbook entries from playbooks/juniper_local_credentials.txt
 4. Force device_type=juniper and connect (TACACS first, local creds fallback)
-5. Run 'show version' to detect JunOS major version
-6. Filter playbook entries to those matching the device's hash format
-7. Run 'show configuration system | display set' to get current config
-8. Verify all target usernames already exist on device
+5. Run 'show version' for informational logging only
+6. Run 'show configuration system | display set' to get current config
+7. Detect hash format ($1$/$5$/$6$) from existing encrypted-password entries in config
+8. Filter playbook entries to those matching the device's hash format
+9. Verify all target usernames already exist on device
    - root: always present
    - other users: must already have a 'set system login user <name>' entry
-9. Compare current hashes vs playbook hashes
-   - All match → return OK 'Already up to date'
-10. Build set commands and apply:
+10. Compare current hashes vs playbook hashes
+    - All match → return OK 'Already up to date'
+11. Build set commands and apply:
     - set system root-authentication encrypted-password "<new_hash>"
     - set system login user <name> authentication encrypted-password "<new_hash>"
     - commit
-11. Re-run 'show configuration system | display set' and verify hashes updated
-12. Return status
+12. Re-run 'show configuration system | display set' and verify hashes updated
+13. Return status
 """
 
 import logging
@@ -66,8 +72,9 @@ logger = logging.getLogger(__name__)
 
 # Hash prefix → human-readable label
 _HASH_LABELS = {
-    "$6$": "SHA-512 (JunOS 15+)",
-    "$1$": "MD5-crypt (JunOS 12.x–14.x)",
+    "$6$": "SHA-512",
+    "$5$": "SHA-256",
+    "$1$": "MD5-crypt",
 }
 
 
@@ -78,7 +85,7 @@ def _is_juniper(platform):
     return p in ("juniper", "junos", "juniper_junos")
 
 
-# --------------------------- Version detection ---------------------------
+# --------------------------- Version / hash detection ---------------------------
 
 def _detect_junos_major_version(show_version_output: str) -> Optional[int]:
     """
@@ -89,6 +96,7 @@ def _detect_junos_major_version(show_version_output: str) -> Optional[int]:
       Junos: 15.1R7.9
       JUNOS Software Release [21.4R3.15]
     Returns the integer major version (e.g. 12, 15, 21) or None if not found.
+    Used for informational logging only — hash selection uses config detection.
     """
     match = re.search(r'[Jj][Uu][Nn][Oo][Ss][^\d]*(\d+)\.', show_version_output)
     if match:
@@ -96,13 +104,26 @@ def _detect_junos_major_version(show_version_output: str) -> Optional[int]:
     return None
 
 
-def _hash_prefix_for_version(major_version: int) -> str:
+def _detect_hash_prefix_from_config(show_config: str) -> Optional[str]:
     """
-    Return the expected encrypted-password hash prefix for this JunOS version.
-    SHA-512 ($6$) was introduced in JunOS 15.1.
-    Anything older uses MD5-crypt ($1$).
+    Detect the encrypted-password hash format actually in use on the device by
+    examining existing encrypted-password entries in 'show configuration | display set'.
+
+    JunOS uses different formats depending on version and platform:
+      $1$  MD5-crypt   (older JunOS, typically < 15.x)
+      $5$  SHA-256     (some JunOS 15.x releases)
+      $6$  SHA-512     (newer JunOS 15.x+)
+
+    Detecting directly from config avoids relying on version-to-hash mappings
+    which vary between platforms and minor releases.
+
+    Returns the prefix string (e.g. '$6$') or None if no hashed password found.
     """
-    return "$6$" if major_version >= 15 else "$1$"
+    for line in show_config.splitlines():
+        match = re.search(r'encrypted-password\s+"?(\$\d+\$)', line)
+        if match:
+            return match.group(1)
+    return None
 
 
 # --------------------------- Playbook helpers ---------------------------
@@ -358,46 +379,55 @@ def run(task: Task, pm=None) -> Result:
                 info_text = "Connection failed: " + sanitize_error_message(primary_err)
                 raise Exception(f"Connection failed: {str(primary_err)}")
 
-        # Step 4: Detect JunOS version
-        logger.info(f"[{host}] Detecting JunOS version...")
+        # Step 4: Detect JunOS version for informational logging only
+        logger.info(f"[{host}] Detecting JunOS version (informational)...")
         show_ver = conn.send_command("show version", delay_factor=2)
         logger.debug(f"[{host}] show version output:\n{show_ver[:300]}")
 
         major_version = _detect_junos_major_version(show_ver)
-        if major_version is None:
-            status = "FAIL"
-            info_text = "Could not detect JunOS version from 'show version' output"
-            raise Exception("JunOS version detection failed")
+        if major_version:
+            logger.info(f"[{host}] Detected JunOS {major_version}.x")
+        else:
+            logger.warning(f"[{host}] Could not detect JunOS version - will detect hash from config")
 
-        hash_prefix = _hash_prefix_for_version(major_version)
-        hash_label = _HASH_LABELS.get(hash_prefix, hash_prefix)
-        logger.info(
-            f"[{host}] Detected JunOS {major_version}.x → using {hash_label} ({hash_prefix})"
-        )
-
-        # Step 5: Filter entries to those matching this device's hash format
-        version_entries = _filter_by_hash_prefix(all_entries, hash_prefix)
-        if not version_entries:
-            status = "FAIL"
-            info_text = (
-                f"No playbook entries found for JunOS {major_version}.x "
-                f"({hash_label}). Add {hash_prefix} hashes to "
-                f"playbooks/juniper_local_credentials.txt"
-            )
-            raise Exception("No matching playbook entries for device version")
-
-        logger.info(
-            f"[{host}] Using {len(version_entries)} playbook entry/entries "
-            f"for JunOS {major_version}.x"
-        )
-
-        # Step 6: Get current config
+        # Step 5: Get current config
         logger.info(f"[{host}] Reading current configuration...")
         show_config = conn.send_command(
             "show configuration system | display set",
             delay_factor=2,
         )
         logger.debug(f"[{host}] show config output:\n{show_config[:500]}")
+
+        # Step 6: Detect hash format from existing config entries
+        hash_prefix = _detect_hash_prefix_from_config(show_config)
+        if hash_prefix is None:
+            status = "FAIL"
+            info_text = (
+                "Could not detect hash format from device config. "
+                "No encrypted-password entries found in 'show configuration system | display set'"
+            )
+            raise Exception("Hash format detection failed")
+
+        hash_label = _HASH_LABELS.get(hash_prefix, hash_prefix)
+        version_str = f"JunOS {major_version}.x" if major_version else "unknown version"
+        logger.info(
+            f"[{host}] Detected hash format: {hash_label} ({hash_prefix}) on {version_str}"
+        )
+
+        # Filter playbook entries to those matching this device's hash format
+        version_entries = _filter_by_hash_prefix(all_entries, hash_prefix)
+        if not version_entries:
+            status = "FAIL"
+            info_text = (
+                f"No playbook entries found for {hash_label} ({hash_prefix}). "
+                f"Add {hash_prefix} hashes to playbooks/juniper_local_credentials.txt"
+            )
+            raise Exception("No matching playbook entries for device hash format")
+
+        logger.info(
+            f"[{host}] Using {len(version_entries)} playbook entry/entries "
+            f"for {hash_label} ({hash_prefix})"
+        )
 
         # Step 7: Verify all target usernames exist before attempting to update
         users_exist, missing_users = _verify_usernames_exist(show_config, version_entries)
@@ -461,10 +491,11 @@ def run(task: Task, pm=None) -> Result:
             logger.error(f"[{host}] Post-commit verification failed: {failed_keys}")
         else:
             n = len(differing_entries)
+            version_str = f"JunOS {major_version}.x" if major_version else "unknown version"
             status = "OK"
             info_text = (
                 f"Updated {n} credential(s) successfully "
-                f"(JunOS {major_version}.x, {hash_label})"
+                f"({version_str}, {hash_label})"
             )
             logger.info(f"[{host}] Credential update verified successfully")
 
@@ -480,7 +511,7 @@ def run(task: Task, pm=None) -> Result:
             for skip in (
                 "Connection failed",
                 "Empty Juniper playbook",
-                "JunOS version detection failed",
+                "Hash format detection failed",
                 "No matching playbook entries",
                 "Missing usernames",
                 "Commit failed",
