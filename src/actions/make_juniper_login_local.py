@@ -45,6 +45,7 @@ from nornir.core.task import Task, Result
 from nornir.plugins.tasks.networking import netmiko_send_command
 
 from src.utils.csv_sanitizer import sanitize_error_message
+from src.utils.transport_discovery import apply_conn
 
 logger = logging.getLogger(__name__)
 
@@ -239,6 +240,10 @@ def run(task: Task, pm=None) -> Result:
             raise Exception("Empty Juniper playbook")
 
         # Step 3: Connect - try TACACS credentials first, fall back to local if they fail
+        # Always force device_type=juniper regardless of what transport_cache.json says.
+        # bootstrap_transport may have cached cisco_ios for this host if the platform was
+        # not recognised at discovery time, causing config_mode() to call the Cisco handler.
+        apply_conn(task.host, "juniper", port)
         try:
             conn = task.host.get_connection("netmiko", task.nornir.config)
             logger.info(f"[{host}] Connected with primary (TACACS) credentials")
@@ -252,10 +257,7 @@ def run(task: Task, pm=None) -> Result:
                 )
                 task.host.username = local_juniper_username
                 task.host.password = local_juniper_password
-                try:
-                    task.host.close_connection("netmiko")
-                except Exception:
-                    pass
+                apply_conn(task.host, "juniper", port)
 
                 try:
                     conn = task.host.get_connection("netmiko", task.nornir.config)
