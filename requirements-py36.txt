@@ -14,8 +14,9 @@ scp==0.14.4
 
 # YAML / templating
 PyYAML==6.0
-Jinja2==3.0.3
-MarkupSafe==2.0.1
+# nornir 2.5.0 requires jinja2<3; 2.11.3 is the last 2.x release
+Jinja2==2.11.3
+MarkupSafe==1.1.1
 
 # Console UX
 rich==12.6.0
