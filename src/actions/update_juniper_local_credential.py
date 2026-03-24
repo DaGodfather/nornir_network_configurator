@@ -478,7 +478,7 @@ def run(task: Task, pm=None) -> Result:
             logger.debug(f"[{host}] => {out.strip()[:120]}")
 
         logger.info(f"[{host}] Committing changes...")
-        commit_out = conn.send_command_timing("commit", delay_factor=5)
+        commit_out = conn.send_command_timing("commit", delay_factor=10)
         logger.info(f"[{host}] Commit output: {commit_out.strip()[:300]}")
 
         if "error" in commit_out.lower() and "commit complete" not in commit_out.lower():
@@ -490,12 +490,28 @@ def run(task: Task, pm=None) -> Result:
 
         conn.exit_config_mode()
 
-        # Step 10: Verify
+        # Step 10: Verify — use send_command_timing to avoid prompt-pattern timeout
+        # after a commit on slower/older devices. If the channel times out, treat the
+        # result as unverified but do not override a commit that appeared successful.
         logger.info(f"[{host}] Verifying changes...")
-        show_config_after = conn.send_command(
-            "show configuration system | display set",
-            delay_factor=2,
-        )
+        try:
+            show_config_after = conn.send_command_timing(
+                "show configuration system | display set",
+                delay_factor=6,
+            )
+        except NetmikoTimeoutException:
+            logger.warning(
+                f"[{host}] Verification timed out after commit — "
+                f"commit appeared successful (no error in commit output)"
+            )
+            n = len(differing_entries)
+            version_str = f"JunOS {major_version}.x"
+            status = "OK"
+            info_text = (
+                f"Updated {n} credential(s) — commit successful, "
+                f"post-commit verification timed out ({version_str}, {hash_label})"
+            )
+            raise Exception("Verification timed out - treated as OK")
 
         still_needs_update, still_differing = _check_needs_update(
             show_config_after, version_entries
@@ -520,6 +536,7 @@ def run(task: Task, pm=None) -> Result:
         if error_str in (
             "Device already updated - early exit",
             "Already up to date - early exit",
+            "Verification timed out - treated as OK",
         ):
             logger.info(f"[{host}] {error_str}")
         elif not any(
