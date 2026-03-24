@@ -360,6 +360,49 @@ def test_authentication(nr: Nornir, max_attempts: int = 3) -> Tuple[bool, str]:
                                 error = retry_data.get("error", "Unknown error")
                                 print(f"❌ Local test password fallback also FAILED on {host_name}: {error}")
 
+                elif host_obj.data.get("local_juniper_password"):
+                    # Juniper local credentials fallback
+                    # Primary credentials failed and local Juniper credentials are available
+                    # (make_juniper_login_local action). Device may already be updated.
+                    local_jun_username = host_obj.data.get(
+                        "local_juniper_username", host_obj.username
+                    )
+                    local_jun_password = host_obj.data["local_juniper_password"]
+                    print(f"⚠️  Primary auth failed on {host_name} - device may already be updated.")
+                    print(f"   Retrying with local Juniper credentials...")
+                    logger.warning(
+                        f"[{host_name}] Primary auth failed - retrying with local_juniper_password"
+                    )
+
+                    host_obj.username = local_jun_username
+                    host_obj.password = local_jun_password
+                    try:
+                        host_obj.close_connection("netmiko")
+                    except Exception:
+                        pass
+
+                    retry_nr = nr.filter(name=host_name)
+                    retry_result = retry_nr.run(
+                        task=test_single_device,
+                        name="Authentication Test (Local Juniper Creds)",
+                    )
+                    if host_name in retry_result:
+                        retry_host_result = retry_result[host_name][0]
+                        retry_data = retry_host_result.result
+                        if not retry_host_result.failed and retry_data.get("success"):
+                            host_obj.data["local_creds_verified"] = True
+                            success_msg = (
+                                f"Authentication test PASSED on {host_name} "
+                                f"(via local Juniper credentials - device may already be updated)"
+                            )
+                            if failed_hosts:
+                                failed_list = ", ".join([f"{h[0]}" for h in failed_hosts])
+                                success_msg += f"\n(Previous attempts failed on: {failed_list})"
+                            return True, success_msg
+                        else:
+                            error = retry_data.get("error", "Unknown error")
+                            print(f"❌ Local Juniper credentials also FAILED on {host_name}: {error}")
+
                 failed_hosts.append((host_name, error))
                 print(f"❌ FAILED on {host_name}: {error}")
                 print(f"Trying next device...")

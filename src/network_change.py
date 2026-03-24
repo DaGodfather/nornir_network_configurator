@@ -40,6 +40,7 @@ ACTION_MAP = {
     "update_cisco_vty_acl":   "update_cisco_vty_acl",
     "update_cisco_local_credentials": "update_cisco_local_credentials",
     "update_aaa_login_method": "update_aaa_login_method",
+    "make_juniper_login_local": "make_juniper_login_local",
     "from_text_file":        "from_text_file",
     "test":                  "test",
 
@@ -224,6 +225,21 @@ def main() -> None:
             host.data["local_test_password"] = local_test_password
         print()
 
+    if action_name == "make_juniper_login_local":
+        print("\n" + "="*60)
+        print("ACTION: Make Juniper Login Local")
+        print("="*60)
+        print("A second session will be opened with local credentials")
+        print("to verify login works BEFORE the commit is confirmed.")
+        print("If the test fails the config change is automatically reverted.")
+        print()
+        local_juniper_username = input("Local Juniper username: ")
+        local_juniper_password = getpass(prompt="Local Juniper password: ")
+        for host in nr.inventory.hosts.values():
+            host.data["local_juniper_username"] = local_juniper_username
+            host.data["local_juniper_password"] = local_juniper_password
+        print()
+
     # Clear the screen.
     os.system("clear")
 
@@ -257,6 +273,26 @@ def main() -> None:
         print("     - PASS: Save configuration")
         print("  8. Save configuration (write memory)")
         print("  NOTE: Juniper devices are skipped automatically")
+        print("=" * 60 + "\n")
+
+    if action_name == "make_juniper_login_local":
+        print("=" * 60)
+        print("Steps performed on each Juniper device:")
+        print("  1. Skip non-Juniper devices automatically")
+        print("  2. Load expected encrypted passwords")
+        print("     (from playbooks/juniper_local_credentials.txt)")
+        print("  3. Verify those encrypted passwords exist on the device")
+        print("     - FAIL: Abort without making any changes")
+        print("  4. Apply config changes and 'commit confirmed 10':")
+        print("       delete system authentication-order")
+        print("       delete system tacplus-server")
+        print("       delete system accounting")
+        print("  5. Open a SECOND session to test local authentication")
+        print("     - PASS: Send confirming 'commit' - changes saved permanently")
+        print("     - FAIL: Send 'rollback 1' + 'commit' - config reverted")
+        print("  NOTE: If primary (TACACS) credentials fail, local credentials")
+        print("        are tried automatically. If that works, device is already")
+        print("        updated and will be marked OK.")
         print("=" * 60 + "\n")
 
     # if not test, create cache for transport type
