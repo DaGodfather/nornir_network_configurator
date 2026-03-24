@@ -203,13 +203,17 @@ def test_authentication(nr: Nornir, max_attempts: int = 3) -> Tuple[bool, str]:
     host_names = list(nr.inventory.hosts.keys())
     total_hosts = len(host_names)
 
-    print(f"\nTesting authentication (will test up to {max_attempts} reachable device(s) from {total_hosts} in inventory)...")
+    print(f"\nTesting authentication against {total_hosts} device(s) in inventory...")
 
     failed_hosts = []
-    tested_count = 0  # how many reachable devices have been auth-tested
+    tested_count = 0   # how many reachable devices attempted
+    success_count = 0  # how many have passed (we stop after 1)
 
     for host_name in host_names:
-        if tested_count >= max_attempts:
+        if success_count >= 1:
+            break
+        # Hard safety cap: don't test more than max_attempts * 5 reachable devices
+        if tested_count >= max_attempts * 5:
             break
 
         host_obj = nr.inventory.hosts[host_name]
@@ -233,7 +237,7 @@ def test_authentication(nr: Nornir, max_attempts: int = 3) -> Tuple[bool, str]:
 
         # --- Device is reachable - run auth test ---
         tested_count += 1
-        print(f"\nAuth test {tested_count}/{max_attempts}: {host_name} ({ip})")
+        print(f"\nAuth test attempt {tested_count}: {host_name} ({ip})")
         print("Please wait...")
 
         test_nr = nr.filter(name=host_name)
@@ -386,6 +390,18 @@ def test_authentication(nr: Nornir, max_attempts: int = 3) -> Tuple[bool, str]:
 
                     host_obj.username = local_jun_username
                     host_obj.password = local_jun_password
+
+                    # transport_cache.json may have cached a wrong device_type
+                    # (e.g. cisco_ios) for this Juniper host. Reset connection
+                    # options to juniper so Netmiko uses the correct handler.
+                    conn_opts_ref = host_obj.connection_options.get("netmiko")
+                    jun_port = (
+                        int(conn_opts_ref.port)
+                        if conn_opts_ref and conn_opts_ref.port
+                        else 22
+                    )
+                    apply_conn(host_obj, "juniper", jun_port)
+
                     try:
                         host_obj.close_connection("netmiko")
                     except Exception:
