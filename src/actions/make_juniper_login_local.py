@@ -36,7 +36,7 @@ import logging
 import re
 import time
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from netmiko import ConnectHandler
 from netmiko.ssh_exception import NetmikoAuthenticationException, NetmikoTimeoutException
@@ -95,24 +95,51 @@ def _load_playbook(
 
 # --------------------------- Credential verification ---------------------------
 
+def _extract_credential_key(entry: str) -> str:
+    """
+    Extract the credential path without the hash value.
+    e.g. 'set system root-authentication encrypted-password "$6$..."'
+      -> 'set system root-authentication encrypted-password'
+    """
+    match = re.match(r'(.+?encrypted-password)\s+', entry.strip())
+    if match:
+        return match.group(1).strip()
+    return entry.strip()
+
+
 def _verify_credentials(show_output: str, playbook_entries: List[str]) -> Tuple[bool, List[str]]:
     """
-    Check that each playbook entry is present in the device's 'show configuration' output.
-    Matches after normalizing whitespace.
+    Verify that at least one playbook entry per credential key is present on the device.
 
-    Returns (all_present: bool, list_of_missing_entries).
+    Groups entries by credential key so that a playbook containing both $1$ (MD5) and
+    $6$ (SHA-512) hashes for the same credential passes as long as one of them matches —
+    i.e. the device has the correct hash for its JunOS version, regardless of which
+    other versions are also in the file.
+
+    Returns (all_present: bool, list_of_credential_keys_with_no_match).
     """
-    missing = []
-    for entry in playbook_entries:
-        normalized_entry = " ".join(entry.split())
-        found = any(
-            normalized_entry in " ".join(line.split())
-            for line in show_output.splitlines()
-        )
-        if not found:
-            missing.append(entry)
+    config_lines = [" ".join(l.split()) for l in show_output.splitlines()]
 
-    return (len(missing) == 0), missing
+    # Group entries by key
+    key_to_entries = {}  # type: Dict[str, List[str]]
+    for entry in playbook_entries:
+        key = _extract_credential_key(entry)
+        if key not in key_to_entries:
+            key_to_entries[key] = []
+        key_to_entries[key].append(entry)
+
+    missing_keys = []
+    for key, entries in key_to_entries.items():
+        found = False
+        for entry in entries:
+            normalized = " ".join(entry.split())
+            if any(normalized in line for line in config_lines):
+                found = True
+                break
+        if not found:
+            missing_keys.append(key)
+
+    return (len(missing_keys) == 0), missing_keys
 
 
 # --------------------------- Test session ---------------------------

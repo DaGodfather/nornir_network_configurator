@@ -41,6 +41,7 @@ ACTION_MAP = {
     "update_cisco_local_credentials": "update_cisco_local_credentials",
     "update_aaa_login_method": "update_aaa_login_method",
     "make_juniper_login_local": "make_juniper_login_local",
+    "update_juniper_local_credential": "update_juniper_local_credential",
     "from_text_file":        "from_text_file",
     "test":                  "test",
 
@@ -293,6 +294,25 @@ def main() -> None:
         print("  NOTE: If primary (TACACS) credentials fail, local credentials")
         print("        are tried automatically. If that works, device is already")
         print("        updated and will be marked OK.")
+        print("=" * 60 + "\n")
+
+    if action_name == "update_juniper_local_credential":
+        print("=" * 60)
+        print("Steps performed on each Juniper device:")
+        print("  1. Skip non-Juniper devices automatically")
+        print("  2. Load credentials from playbooks/juniper_local_credentials.txt")
+        print("     (supports both $6$ SHA-512 for 15.x+ and $1$ MD5 for 12.x-14.x)")
+        print("  3. Connect to device and run 'show version' to detect JunOS version")
+        print("  4. Auto-select the correct hash format for this device's version")
+        print("     - FAIL: No matching hash entries found for device version")
+        print("  5. Verify target username(s) already exist on device")
+        print("     - FAIL: Username not found (create accounts manually first)")
+        print("  6. Compare current hashes vs playbook hashes")
+        print("     - Already match: return OK 'Already up to date'")
+        print("  7. Apply updated set commands and commit")
+        print("  8. Verify changes were applied successfully")
+        print("  NOTE: Intended to run BEFORE make_juniper_login_local")
+        print("        so local accounts are ready before TACACS is removed.")
         print("=" * 60 + "\n")
 
     # if not test, create cache for transport type
