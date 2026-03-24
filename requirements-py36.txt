@@ -19,11 +19,14 @@ Jinja2==2.11.3
 MarkupSafe==1.1.1
 
 # Console UX
-rich==12.6.0
+# rich>=11.0 requires typing-extensions>=4.0 on Python<3.9, conflicting with nornir 2.5.
+# rich 10.16.2 is the last release that works with typing-extensions 3.x.
+rich==10.16.2
 tabulate==0.8.10
 
 # Typing backports for 3.6
 # nornir 2.5.0 requires typing_extensions<4.0; 3.10.0.2 is the last 3.x release
+# rich 10.x is also compatible with this range (requires >=3.7.4)
 typing-extensions==3.10.0.2
 
 # (Optional) If you parse TextFSM templates with Netmiko
