@@ -189,6 +189,7 @@ def main() -> None:
     # ---- Local credentials (use_local mode) ----
     local_username = None
     local_password = None
+    local_enable = None
 
     if cliargs.args.use_local:
         print("\n" + "="*60)
@@ -203,6 +204,9 @@ def main() -> None:
         local_input = input(f"Local username [{username}]: ").strip()
         local_username = local_input if local_input else username
         local_password = getpass(prompt="Local password: ")
+        local_enable = getpass(prompt="Local enable password (press Enter if same as local password): ")
+        if not local_enable:
+            local_enable = local_password
         print()
 
     # ---- Resolve inventory/config.yaml from project root ----
@@ -222,7 +226,7 @@ def main() -> None:
             # Local creds are primary; store TACACS as fallback for auth test
             host.username = local_username
             host.password = local_password
-            host.data["enable_secret"] = local_password
+            host.data["enable_secret"] = local_enable   # used for enable mode and Telnet password-only auth
             host.data["tacacs_username"] = username
             host.data["tacacs_password"] = password
             host.data["tacacs_enable"] = enable_secret

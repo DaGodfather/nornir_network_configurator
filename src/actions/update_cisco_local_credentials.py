@@ -217,8 +217,11 @@ def run(task: Task, pm=None) -> Result:
 
             for attempt in range(2):  # Try twice
                 try:
-                    # Get the netmiko connection and enter enable mode
+                    # Get the netmiko connection and enter enable mode.
+                    # Sync conn.secret from host.data["enable_secret"] — the connection may have
+                    # been initialized with a stale secret (e.g. TACACS enable when -use_local active).
                     conn = task.host.get_connection("netmiko", task.nornir.config)
+                    conn.secret = enable_secret
                     if not conn.check_enable_mode():
                         conn.enable()
                         logger.info(f"[{host}] Successfully entered enable mode (attempt {attempt + 1})")
@@ -231,6 +234,10 @@ def run(task: Task, pm=None) -> Result:
                     if attempt == 0:  # First attempt failed
                         logger.warning(f"[{host}] Enable mode attempt 1 failed: {str(e)}")
                         logger.info(f"[{host}] Waiting 15 seconds before retry...")
+                        try:
+                            task.host.close_connection("netmiko")
+                        except Exception:
+                            pass
                         time.sleep(15)
                     else:  # Second attempt failed
                         # Enable mode failure is FATAL for Cisco
