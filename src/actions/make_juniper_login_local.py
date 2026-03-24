@@ -18,15 +18,17 @@ Steps performed on each device:
 6. Verify that the version-correct hash entries exist in device's running config
    - If missing or wrong hash format: FAIL without making any changes
    - This prevents removing TACACS if credentials were not properly updated first
-7. Capture original authentication config for rollback reference
-8. Apply config changes and commit confirmed 10:
+7. Capture original authentication config for logging/reference
+8. Open a SECOND session with local Juniper credentials to verify login works
+   (tested WHILE TACACS is still active — avoids the stale-connection problem
+   of the old 'commit confirmed + second session + confirming commit' flow)
+   - FAIL: abort without touching the config
+   - PASS: proceed
+9. Enter config mode, delete TACACS config, commit:
      delete system authentication-order
      delete system tacplus-server
      delete system accounting
-     commit confirmed 10
-9. Open a SECOND session with local Juniper credentials to verify login works
-   - PASS: send confirming 'commit' on the original session
-   - FAIL: send 'rollback 1' + 'commit' on the original session to revert
+     commit
 10. Return status
 
 Fallback behavior:
@@ -415,7 +417,32 @@ def run(task: Task, pm=None) -> Result:
             + "\n".join(f"  {l}" for l in original_auth_lines)
         )
 
-        # Step 6: Enter config mode and apply changes + commit confirmed 10
+        # Step 6: Test local credentials in a second session BEFORE making any changes.
+        # Testing while TACACS is still active means:
+        #   - A pass here guarantees local auth will work after TACACS is removed.
+        #   - We avoid the stale-connection problem that plagued the old
+        #     "commit confirmed 10 → test → confirming commit" flow, where the
+        #     original session could go idle during the test and silently drop the
+        #     confirming commit, causing every device to auto-revert.
+        logger.info(
+            f"[{host}] Testing local credentials in second session (TACACS still active)..."
+        )
+        test_ok, test_msg = _test_local_login(
+            host, ip, port, device_type,
+            local_juniper_username, local_juniper_password,
+        )
+
+        if not test_ok:
+            status = "FAIL"
+            info_text = (
+                f"Local credential test failed — aborting without config changes. "
+                f"Reason: {test_msg}"
+            )
+            raise Exception(f"Local auth test failed (pre-change): {test_msg}")
+
+        logger.info(f"[{host}] Local credential test PASSED — proceeding with config changes")
+
+        # Step 7: Enter config mode, delete TACACS config, commit
         logger.info(f"[{host}] Entering configuration mode...")
         conn.config_mode()
 
@@ -428,55 +455,22 @@ def run(task: Task, pm=None) -> Result:
             out = conn.send_command_timing(cmd, delay_factor=2)
             logger.debug(f"[{host}] '{cmd}' => {out.strip()[:120]}")
 
-        logger.info(f"[{host}] Sending 'commit confirmed 10'...")
-        commit_out = conn.send_command_timing("commit confirmed 10", delay_factor=5)
-        logger.info(f"[{host}] commit confirmed 10 output: {commit_out.strip()[:300]}")
+        logger.info(f"[{host}] Committing config changes...")
+        commit_out = conn.send_command_timing("commit", delay_factor=8)
+        logger.info(f"[{host}] Commit output: {commit_out.strip()[:300]}")
 
         if "error" in commit_out.lower() and "commit complete" not in commit_out.lower():
-            # Commit failed - abort without any config change taking effect
-            logger.error(f"[{host}] 'commit confirmed 10' failed - aborting")
+            logger.error(f"[{host}] Commit failed - rolling back")
             conn.send_command_timing("rollback 0", delay_factor=2)
             conn.exit_config_mode()
             status = "FAIL"
-            info_text = f"commit confirmed 10 failed: {commit_out.strip()[:200]}"
-            raise Exception("commit confirmed 10 failed")
+            info_text = f"Commit failed: {commit_out.strip()[:200]}"
+            raise Exception("Commit failed")
 
-        logger.info(
-            f"[{host}] Config committed (confirmed window: 10 min). "
-            f"Testing local auth with second session..."
-        )
-
-        # Step 7: Test second session with local credentials
-        test_ok, test_msg = _test_local_login(
-            host, ip, port, device_type,
-            local_juniper_username, local_juniper_password,
-        )
-
-        if test_ok:
-            # Confirm the commit - prevent auto-revert
-            logger.info(f"[{host}] Local auth PASSED - sending confirming 'commit'")
-            confirm_out = conn.send_command_timing("commit", delay_factor=5)
-            logger.info(f"[{host}] Confirm commit output: {confirm_out.strip()[:300]}")
-            conn.exit_config_mode()
-
-            status = "OK"
-            info_text = "TACACS removed, local authentication active and confirmed"
-            logger.info(f"[{host}] make_juniper_login_local completed successfully")
-
-        else:
-            # Revert - rollback and commit to undo the committed-confirmed changes
-            logger.warning(
-                f"[{host}] Local auth FAILED ({test_msg}) - "
-                f"rolling back config changes"
-            )
-            conn.send_command_timing("rollback 1", delay_factor=3)
-            rollback_out = conn.send_command_timing("commit", delay_factor=5)
-            logger.info(f"[{host}] Rollback commit output: {rollback_out.strip()[:300]}")
-            conn.exit_config_mode()
-
-            status = "FAIL"
-            info_text = f"Local auth test failed - config reverted to original. Reason: {test_msg}"
-            raise Exception(f"Local auth test failed: {test_msg}")
+        conn.exit_config_mode()
+        status = "OK"
+        info_text = "TACACS removed, local authentication active and confirmed"
+        logger.info(f"[{host}] make_juniper_login_local completed successfully")
 
     except Exception as e:
         error_str = str(e)
@@ -486,7 +480,7 @@ def run(task: Task, pm=None) -> Result:
         elif not any(
             skip in error_str
             for skip in (
-                "commit confirmed 10 failed",
+                "Commit failed",
                 "Credential verification failed",
                 "Connection failed",
                 "Empty Juniper playbook",
