@@ -49,6 +49,7 @@ Automate configuration audits and changes across Cisco IOS/IOS-XE and Juniper Ju
 python3.6 -V   # should be 3.6.8
 python3.6 -m venv .venv
 source .venv/bin/activate
+pip install --upgrade pip
 pip install -r requirements-py36.txt
 ```
 > 💡 If you also run newer Python (e.g., 3.10+), keep a separate lock file (e.g., `requirements-modern.txt`).

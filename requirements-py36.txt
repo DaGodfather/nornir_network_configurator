@@ -22,7 +22,8 @@ rich==12.6.0
 tabulate==0.8.10
 
 # Typing backports for 3.6
-typing-extensions==4.1.1
+# nornir 2.5.0 requires typing_extensions<4.0; 3.10.0.2 is the last 3.x release
+typing-extensions==3.10.0.2
 
 # (Optional) If you parse TextFSM templates with Netmiko
 # textfsm==1.1.2
