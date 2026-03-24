@@ -360,10 +360,10 @@ def test_authentication(nr: Nornir, max_attempts: int = 3) -> Tuple[bool, str]:
                                 error = retry_data.get("error", "Unknown error")
                                 print(f"❌ Local test password fallback also FAILED on {host_name}: {error}")
 
-                elif host_obj.data.get("local_juniper_password"):
-                    # Juniper local credentials fallback
-                    # Primary credentials failed and local Juniper credentials are available
-                    # (make_juniper_login_local action). Device may already be updated.
+                elif host_obj.data.get("local_juniper_password") and not host_obj.data.get("tacacs_username"):
+                    # Juniper local credentials fallback (make_juniper_login_local / update_juniper_local_credential).
+                    # Only when NOT in use_local mode (tacacs_username absent means TACACS is primary).
+                    # Device may already be switched to local auth.
                     local_jun_username = host_obj.data.get(
                         "local_juniper_username", host_obj.username
                     )
@@ -402,6 +402,49 @@ def test_authentication(nr: Nornir, max_attempts: int = 3) -> Tuple[bool, str]:
                         else:
                             error = retry_data.get("error", "Unknown error")
                             print(f"❌ Local Juniper credentials also FAILED on {host_name}: {error}")
+
+                elif host_obj.data.get("tacacs_username"):
+                    # use_local mode: local credentials (primary) failed — fall back to TACACS.
+                    # This handles devices that are not yet switched to local auth.
+                    tacacs_user = host_obj.data["tacacs_username"]
+                    tacacs_pass = host_obj.data["tacacs_password"]
+                    tacacs_enable = host_obj.data.get("tacacs_enable", tacacs_pass)
+                    print(f"⚠️  Local credentials failed on {host_name} - trying TACACS fallback...")
+                    logger.warning(
+                        f"[{host_name}] Local credentials failed (use_local mode) - retrying with TACACS"
+                    )
+
+                    host_obj.username = tacacs_user
+                    host_obj.password = tacacs_pass
+                    host_obj.data["enable_secret"] = tacacs_enable
+                    # Keep local_juniper_username/password so Juniper actions can still use them
+                    try:
+                        host_obj.close_connection("netmiko")
+                    except Exception:
+                        pass
+
+                    retry_nr = nr.filter(name=host_name)
+                    retry_result = retry_nr.run(
+                        task=test_single_device,
+                        name="Authentication Test (TACACS fallback)",
+                    )
+                    if host_name in retry_result:
+                        retry_host_result = retry_result[host_name][0]
+                        retry_data = retry_host_result.result
+                        if not retry_host_result.failed and retry_data.get("success"):
+                            # TACACS worked — device is not yet on local auth.
+                            # Keep TACACS as the active credentials for this run.
+                            success_msg = (
+                                f"Authentication test PASSED on {host_name} "
+                                f"(via TACACS fallback - device not yet on local auth)"
+                            )
+                            if failed_hosts:
+                                failed_list = ", ".join([f"{h[0]}" for h in failed_hosts])
+                                success_msg += f"\n(Previous attempts failed on: {failed_list})"
+                            return True, success_msg
+                        else:
+                            error = retry_data.get("error", "Unknown error")
+                            print(f"❌ TACACS fallback also FAILED on {host_name}: {error}")
 
                 failed_hosts.append((host_name, error))
                 print(f"❌ FAILED on {host_name}: {error}")

@@ -186,6 +186,25 @@ def main() -> None:
     if not enable_secret:
         enable_secret = password
 
+    # ---- Local credentials (use_local mode) ----
+    local_username = None
+    local_password = None
+
+    if cliargs.args.use_local:
+        print("\n" + "="*60)
+        print("LOCAL CREDENTIALS MODE (-use_local)")
+        print("="*60)
+        print("Local credentials will be tried FIRST on all devices.")
+        print("TACACS credentials will be used as fallback if local fails.")
+        print()
+        print("NOTE: For Cisco devices the local username is sent via SSH.")
+        print("      Leave blank to reuse your TACACS username.")
+        print()
+        local_input = input(f"Local username [{username}]: ").strip()
+        local_username = local_input if local_input else username
+        local_password = getpass(prompt="Local password: ")
+        print()
+
     # ---- Resolve inventory/config.yaml from project root ----
     project_root = Path(__file__).resolve().parents[1]  # .../your_project
     config_path = project_root / "inventory" / "config.yaml"
@@ -199,10 +218,22 @@ def main() -> None:
 
     # Set creds on each host
     for host in nr.inventory.hosts.values():
-        host.username = username
-        host.password = password
-        # Store enable secret in host data for use by connection options
-        host.data["enable_secret"] = enable_secret
+        if cliargs.args.use_local:
+            # Local creds are primary; store TACACS as fallback for auth test
+            host.username = local_username
+            host.password = local_password
+            host.data["enable_secret"] = local_password
+            host.data["tacacs_username"] = username
+            host.data["tacacs_password"] = password
+            host.data["tacacs_enable"] = enable_secret
+            # Juniper actions look for these specific keys
+            host.data["local_juniper_username"] = local_username
+            host.data["local_juniper_password"] = local_password
+        else:
+            host.username = username
+            host.password = password
+            # Store enable secret in host data for use by connection options
+            host.data["enable_secret"] = enable_secret
 
     device_count = len(nr.inventory.hosts)
 

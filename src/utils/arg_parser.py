@@ -24,6 +24,7 @@ class CliArgs:
         self.parser.add_argument("-update_syslog", action="store_true", help="Update syslog server config on devices using 'playbooks/syslog.txt'")
         self.parser.add_argument("-dry_run", action="store_true", help="Used for dry, no all actions support this") #This is not in the CLI mapping
         self.parser.add_argument("-test", action="store_true", help="Test action items will be called.")
+        self.parser.add_argument("-use_local", action="store_true", help="Try local device credentials first; fall back to TACACS if local fails. For Juniper both username and password are required. For Cisco the local username is always sent via SSH.")
 
         self.args = None
 
