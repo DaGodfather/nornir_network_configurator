@@ -73,6 +73,12 @@ def _is_cisco(platform: Optional[str]) -> bool:
     return p in ("cisco_ios", "ios", "ios-xe", "iosxe", "cisco_nxos", "nxos", "cisco_ios_telnet")
 
 
+def _is_juniper(platform: Optional[str]) -> bool:
+    """Check if platform is Juniper."""
+    p = (platform or "").lower()
+    return p in ("juniper", "junos", "juniper_junos")
+
+
 def test_single_device(task: Task) -> Result:
     """
     Test authentication and enable mode on a single device.
@@ -360,7 +366,11 @@ def test_authentication(nr: Nornir, max_attempts: int = 3) -> Tuple[bool, str]:
                                 error = retry_data.get("error", "Unknown error")
                                 print(f"❌ Local test password fallback also FAILED on {host_name}: {error}")
 
-                elif host_obj.data.get("local_juniper_password") and not host_obj.data.get("tacacs_username"):
+                elif (
+                    _is_juniper(host_obj.platform)
+                    and host_obj.data.get("local_juniper_password")
+                    and not host_obj.data.get("tacacs_username")
+                ):
                     # Juniper local credentials fallback (make_juniper_login_local / update_juniper_local_credential).
                     # Only when NOT in use_local mode (tacacs_username absent means TACACS is primary).
                     # Device may already be switched to local auth.
