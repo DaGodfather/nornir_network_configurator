@@ -19,6 +19,7 @@ class CliArgs:
         self.parser.add_argument("-update_cisco_vty_acl", action="store_true", help="Update Cisco ACL using 'input/acl_entries.txt' file")
         self.parser.add_argument("-update_cisco_local_credentials", action="store_true", help="Update Cisco local credentials using 'playbooks/cisco_local_credentials.txt' file")
         self.parser.add_argument("-update_aaa_login_method", action="store_true", help="Update AAA login method on Cisco devices and test local auth using 'playbooks/cisco_aaa_login_method.txt'")
+        self.parser.add_argument("-make_juniper_login_local", action="store_true", help="Remove TACACS from Juniper devices and switch to local auth using 'playbooks/juniper_local_credentials.txt'")
         self.parser.add_argument("-update_syslog", action="store_true", help="Update syslog server config on devices using 'playbooks/syslog.txt'")
         self.parser.add_argument("-dry_run", action="store_true", help="Used for dry, no all actions support this") #This is not in the CLI mapping
         self.parser.add_argument("-test", action="store_true", help="Test action items will be called.")
