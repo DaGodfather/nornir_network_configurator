@@ -22,6 +22,7 @@ import time
 from typing import List, Set
 from pathlib import Path
 from src.utils.csv_sanitizer import sanitize_for_csv, sanitize_error_message
+from src.utils.enable_mode import _try_password_only_telnet
 from nornir.core.task import Task, Result
 from nornir.plugins.tasks.networking import netmiko_send_command
 from netmiko.ssh_exception import NetmikoAuthenticationException, NetmikoTimeoutException
@@ -167,6 +168,7 @@ def run(task: Task, pm=None) -> Result:
             logger.info(f"[{host}] Entering enable mode...")
             enable_success = False
 
+            _pw_only_switched = False  # only probe password-only telnet once
             for attempt in range(2):  # Try twice
                 try:
                     conn = task.host.get_connection("netmiko", task.nornir.config)
@@ -180,8 +182,49 @@ def run(task: Task, pm=None) -> Result:
                     break
 
                 except Exception as e:
-                    if attempt == 0:  # First attempt failed
-                        logger.warning(f"[{host}] Enable mode attempt 1 failed: {str(e)}")
+                    error_str = str(e)
+                    logger.warning(f"[{host}] Enable mode attempt {attempt + 1} failed: {error_str}")
+
+                    if (
+                        "telnet connection closed" in error_str.lower()
+                        and enable_secret
+                        and not _pw_only_switched
+                    ):
+                        conn_opts_pw = task.host.connection_options.get("netmiko")
+                        curr_dt_pw = (
+                            conn_opts_pw.extras.get("device_type", "") if conn_opts_pw else ""
+                        )
+                        if "telnet" in curr_dt_pw.lower():
+                            _tport = (
+                                int(conn_opts_pw.port)
+                                if conn_opts_pw and conn_opts_pw.port
+                                else 23
+                            )
+                            logger.info(
+                                f"[{host}] Telnet closed — likely password-only auth. "
+                                f"Probing with enable_secret via raw telnetlib..."
+                            )
+                            _pw_ok, _pw_msg = _try_password_only_telnet(
+                                host, task.host.hostname or "", _tport, enable_secret
+                            )
+                            if _pw_ok:
+                                task.host.password = enable_secret
+                                _pw_only_switched = True
+                                logger.info(
+                                    f"[{host}] Password-only telnet succeeded — "
+                                    f"host.password updated to enable_secret, retrying..."
+                                )
+                                try:
+                                    task.host.close_connection("netmiko")
+                                except Exception:
+                                    pass
+                                continue
+                            else:
+                                logger.warning(
+                                    f"[{host}] Password-only telnet probe also failed: {_pw_msg}"
+                                )
+
+                    if attempt == 0:  # First attempt failed (non-password-only path)
                         logger.info(f"[{host}] Waiting 15 seconds before retry...")
                         try:
                             task.host.close_connection("netmiko")
@@ -189,10 +232,10 @@ def run(task: Task, pm=None) -> Result:
                             pass
                         time.sleep(15)
                     else:  # Second attempt failed
-                        error_msg = f"Enable mode failed after 2 attempts: {str(e)}"
+                        error_msg = f"Enable mode failed after 2 attempts: {error_str}"
                         logger.error(f"[{host}] {error_msg}")
                         status = "FAIL"
-                        info_text = f"Enable mode failed - check enable password. Error: {str(e)}"
+                        info_text = f"Enable mode failed - check enable password. Error: {error_str}"
                         raise Exception(error_msg)
 
             if not enable_success:
