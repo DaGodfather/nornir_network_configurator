@@ -270,6 +270,7 @@ def test_authentication(nr: Nornir, max_attempts: int = 3) -> Tuple[bool, str]:
                         logger.info(f"[{host_name}] Cache updated to Telnet")
 
                         print(f"   Retrying authentication via Telnet...")
+                        nr.data.failed_hosts.discard(host_name)
                         retry_nr = nr.filter(name=host_name)
                         retry_result = retry_nr.run(task=test_single_device, name="Authentication Test (Telnet)")
                         if host_name in retry_result:
@@ -349,6 +350,7 @@ def test_authentication(nr: Nornir, max_attempts: int = 3) -> Tuple[bool, str]:
                     else:
                         # SSH devices: Netmiko handles username+password correctly even with
                         # 'aaa authentication login default enable', so use the normal task.
+                        nr.data.failed_hosts.discard(host_name)
                         retry_nr = nr.filter(name=host_name)
                         retry_result = retry_nr.run(
                             task=test_single_device, name="Authentication Test (Local Creds)"
@@ -407,6 +409,7 @@ def test_authentication(nr: Nornir, max_attempts: int = 3) -> Tuple[bool, str]:
                     except Exception:
                         pass
 
+                    nr.data.failed_hosts.discard(host_name)
                     retry_nr = nr.filter(name=host_name)
                     retry_result = retry_nr.run(
                         task=test_single_device,
@@ -449,6 +452,7 @@ def test_authentication(nr: Nornir, max_attempts: int = 3) -> Tuple[bool, str]:
                     except Exception:
                         pass
 
+                    nr.data.failed_hosts.discard(host_name)
                     retry_nr = nr.filter(name=host_name)
                     retry_result = retry_nr.run(
                         task=test_single_device,

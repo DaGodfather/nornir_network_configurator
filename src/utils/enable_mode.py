@@ -5,12 +5,46 @@ Includes multiple retry strategies and workarounds for problematic devices.
 """
 
 import logging
+import telnetlib
 import time
 from typing import Tuple, Optional
 from nornir.core.task import Task
 from src.utils.transport_discovery import apply_conn, is_port_open, load_cache, save_cache
 
 logger = logging.getLogger(__name__)
+
+
+def _try_password_only_telnet(
+    host_name: str, ip: str, port: int, password: str, timeout: int = 20
+) -> Tuple[bool, str]:
+    """
+    Test Telnet access for devices configured with 'aaa authentication login default enable'
+    or line-password-only auth — they present only a Password: prompt (no Username: prompt).
+
+    Netmiko's cisco_ios_telnet always sends a username before looking for prompts; the
+    device interprets the unexpected bytes as a wrong password and closes the connection.
+    This function uses raw telnetlib so we only respond when Password: appears.
+
+    Returns (success, message).
+    """
+    try:
+        tn = telnetlib.Telnet(ip, port, timeout=timeout)
+        idx, _, _ = tn.expect(
+            [b"Password:", b"password:", b"assword "],
+            timeout=timeout,
+        )
+        if idx < 0:
+            tn.close()
+            return False, "No password prompt received within timeout"
+        tn.write(password.encode("ascii") + b"\n")
+        time.sleep(3)
+        response = tn.read_very_eager().decode("ascii", errors="ignore")
+        tn.close()
+        if ">" in response or "#" in response:
+            return True, "Password-only telnet login successful"
+        return False, f"Login failed - no exec prompt in response: {response[:80]!r}"
+    except Exception as e:
+        return False, f"Telnet error: {str(e)}"
 
 
 def enter_enable_mode_robust(
@@ -69,6 +103,50 @@ def enter_enable_mode_robust(
             except Exception as conn_error:
                 error_msg = f"Failed to establish connection: {str(conn_error)}"
                 logger.error(f"[{host}] {error_msg}")
+
+                # Password-only telnet fast-path:
+                # "telnet connection closed" on a telnet device almost always means
+                # the device only shows a Password: prompt (aaa authentication login
+                # default enable / line password auth) and Netmiko sent the SSH
+                # password which the device rejected.  Rather than burning 3 × 15 s
+                # retry slots with the same wrong credentials, probe immediately with
+                # the enable_secret via raw telnetlib.  If it works, update
+                # host.password so all subsequent Netmiko connections also use it.
+                if (
+                    "telnet connection closed" in error_msg.lower()
+                    and enable_secret
+                    and not _telnet_switched
+                ):
+                    conn_opts_pw = task.host.connection_options.get("netmiko")
+                    curr_dt_pw = (
+                        conn_opts_pw.extras.get("device_type", "") if conn_opts_pw else ""
+                    )
+                    if "telnet" in curr_dt_pw.lower():
+                        _tport = (
+                            int(conn_opts_pw.port)
+                            if conn_opts_pw and conn_opts_pw.port
+                            else 23
+                        )
+                        logger.info(
+                            f"[{host}] Telnet closed — likely password-only auth. "
+                            f"Probing with enable_secret via raw telnetlib..."
+                        )
+                        _pw_ok, _pw_msg = _try_password_only_telnet(
+                            host, task.host.hostname or "", _tport, enable_secret
+                        )
+                        if _pw_ok:
+                            # Correct password found: update host.password so Netmiko
+                            # uses it for the actual action connections too.
+                            task.host.password = enable_secret
+                            logger.info(
+                                f"[{host}] Password-only telnet succeeded — "
+                                f"host.password updated to enable_secret"
+                            )
+                            return True, "Password-only telnet authentication successful"
+                        else:
+                            logger.warning(
+                                f"[{host}] Password-only telnet probe also failed: {_pw_msg}"
+                            )
 
                 # SSH → Telnet fallback: if SSH connection fails and port 23 is open,
                 # switch transport and retry via Telnet on the next attempt.
