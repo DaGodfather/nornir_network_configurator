@@ -185,8 +185,12 @@ def run(task: Task, pm=None) -> Result:
                     error_str = str(e)
                     logger.warning(f"[{host}] Enable mode attempt {attempt + 1} failed: {error_str}")
 
-                    if (
+                    _is_telnet_auth_failure = (
                         "telnet connection closed" in error_str.lower()
+                        or "login failed" in error_str.lower()
+                    )
+                    if (
+                        _is_telnet_auth_failure
                         and enable_secret
                         and not _pw_only_switched
                     ):
@@ -201,7 +205,7 @@ def run(task: Task, pm=None) -> Result:
                                 else 23
                             )
                             logger.info(
-                                f"[{host}] Telnet closed — likely password-only auth. "
+                                f"[{host}] Telnet auth failure — likely password-only auth. "
                                 f"Probing with enable_secret via raw telnetlib..."
                             )
                             _pw_ok, _pw_msg = _try_password_only_telnet(

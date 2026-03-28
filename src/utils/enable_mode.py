@@ -112,8 +112,12 @@ def enter_enable_mode_robust(
                 # retry slots with the same wrong credentials, probe immediately with
                 # the enable_secret via raw telnetlib.  If it works, update
                 # host.password so all subsequent Netmiko connections also use it.
-                if (
+                _is_telnet_auth_failure = (
                     "telnet connection closed" in error_msg.lower()
+                    or "login failed" in error_msg.lower()
+                )
+                if (
+                    _is_telnet_auth_failure
                     and enable_secret
                     and not _telnet_switched
                 ):

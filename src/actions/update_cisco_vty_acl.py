@@ -298,10 +298,16 @@ def run(task: Task, pm=None) -> Result:
                     # Password-only telnet fast-path: devices configured with
                     # 'aaa authentication login default enable' or line password auth
                     # show only a Password: prompt. Netmiko sends host.password (SSH/TACACS
-                    # password) which gets rejected. Probe with enable_secret via raw
+                    # password) which gets rejected. Errors seen: "telnet connection closed"
+                    # (device closes immediately) or "login failed" (Netmiko sends username
+                    # to Password: prompt, gets rejected). Probe with enable_secret via raw
                     # telnetlib; if it works, update host.password so Netmiko uses it.
-                    if (
+                    _is_telnet_auth_failure = (
                         "telnet connection closed" in error_str.lower()
+                        or "login failed" in error_str.lower()
+                    )
+                    if (
+                        _is_telnet_auth_failure
                         and enable_secret
                         and not _pw_only_switched
                     ):
